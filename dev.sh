@@ -11,7 +11,7 @@ lsof -ti:$EXPO_PORT | xargs kill -9 2>/dev/null
 sleep 1
 
 echo "🚀 启动 Server (port $SERVER_PORT)..."
-PORT=$SERVER_PORT npx tsx src/server/index.ts &
+(cd src/server && PORT=$SERVER_PORT npx tsx index.ts) &
 SERVER_PID=$!
 sleep 2
 

@@ -6,6 +6,7 @@ import { SessionState } from '../../shared/types'
 
 // 开发时使用本机 IP，后续可配置
 const SERVER_URL = 'ws://192.168.100.241:9527/ws'
+const MODEL_URL = 'http://192.168.100.241:9527/assets/models/default.vrm'
 
 export default function MainScreen() {
   const { connected, state, transition } = useSession(SERVER_URL)
@@ -32,7 +33,7 @@ export default function MainScreen() {
 
   return (
     <View style={styles.container}>
-      <AvatarWebView ref={avatarRef} onReady={handleReady} onError={handleError} />
+      <AvatarWebView ref={avatarRef} modelUrl={MODEL_URL} onReady={handleReady} onError={handleError} />
       {/* Debug 信息 */}
       <View style={styles.debugBar}>
         <Text style={styles.debugText}>

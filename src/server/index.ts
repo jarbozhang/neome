@@ -1,4 +1,6 @@
+import path from 'path'
 import Fastify from 'fastify'
+import fastifyStatic from '@fastify/static'
 import websocket from '@fastify/websocket'
 import { WSMessage } from '../shared/types'
 
@@ -7,6 +9,12 @@ const app = Fastify({ logger: true })
 const start = async () => {
   try {
     await app.register(websocket)
+
+    // 托管 assets 静态文件（VRM 模型等）
+    await app.register(fastifyStatic, {
+      root: path.resolve(__dirname, '../../assets'),
+      prefix: '/assets/',
+    })
 
     // Health check
     app.get('/health', async () => {

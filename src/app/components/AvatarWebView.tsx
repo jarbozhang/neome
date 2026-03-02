@@ -3,7 +3,9 @@ import { StyleSheet } from 'react-native'
 import { WebView, WebViewMessageEvent } from 'react-native-webview'
 
 // WebView 加载的完整 HTML 内容（内联，避免 WebView 本地文件访问限制）
-const WEBVIEW_HTML = `<!DOCTYPE html>
+// modelUrl 通过模板字符串注入 JS 中的 MODEL_URL 常量
+function getWebViewHTML(modelUrl: string): string {
+  return `<!DOCTYPE html>
 <html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
@@ -28,7 +30,10 @@ const WEBVIEW_HTML = `<!DOCTYPE html>
     import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader'
     import { VRMLoaderPlugin } from '@pixiv/three-vrm'
 
+    const MODEL_URL = '${modelUrl}'
+
     let scene, camera, renderer, currentVRM = null
+    let vrmScene = null
     const clock = new THREE.Clock()
 
     // 状态机
@@ -138,11 +143,40 @@ const WEBVIEW_HTML = `<!DOCTYPE html>
       loader.register((parser) => new VRMLoaderPlugin(parser))
 
       try {
-        createPlaceholderAvatar()
-        sendToRN({ type: 'ready', data: { placeholder: true } })
+        sendToRN({ type: 'loading', data: { status: 'loading' } })
+        const gltf = await loader.loadAsync(MODEL_URL)
+        currentVRM = gltf.userData.vrm
+        vrmScene = gltf.scene
+
+        // VRM 模型默认朝 +Z，旋转 180° 面向相机
+        vrmScene.rotation.y = Math.PI
+        scene.add(vrmScene)
+
+        // 移除占位体（如果有的话）
+        removePlaceholder()
+
+        sendToRN({ type: 'ready', data: { vrm: true } })
+        startBlinking()
       } catch (err) {
         console.error('Failed to load VRM:', err)
-        sendToRN({ type: 'error', data: { message: err.message } })
+        // 加载失败，使用占位体
+        createPlaceholderAvatar()
+        sendToRN({ type: 'ready', data: { placeholder: true, error: err.message } })
+      }
+    }
+
+    function removePlaceholder() {
+      if (placeholderBody) {
+        scene.remove(placeholderBody)
+        placeholderBody.geometry.dispose()
+        placeholderBody.material.dispose()
+        placeholderBody = null
+      }
+      if (placeholderHead) {
+        scene.remove(placeholderHead)
+        placeholderHead.geometry.dispose()
+        placeholderHead.material.dispose()
+        placeholderHead = null
       }
     }
 
@@ -177,10 +211,18 @@ const WEBVIEW_HTML = `<!DOCTYPE html>
 
       if (currentVRM) {
         currentVRM.update(delta)
+
+        // VRM 呼吸动画：微调 spine bone
+        if (breathingEnabled) {
+          const spine = currentVRM.humanoid.getNormalizedBoneNode('spine')
+          if (spine) {
+            spine.rotation.x = Math.sin(elapsed * 1.8) * 0.01
+          }
+        }
       }
 
-      // 呼吸动画（占位体）
-      if (breathingEnabled && placeholderBody && placeholderHead) {
+      // 占位体呼吸（fallback）
+      if (breathingEnabled && placeholderBody && placeholderHead && !currentVRM) {
         const breathOffset = Math.sin(elapsed * 1.8) * 0.002
         placeholderBody.position.y = 1.0 + breathOffset
         placeholderHead.position.y = 1.5 + breathOffset
@@ -189,7 +231,7 @@ const WEBVIEW_HTML = `<!DOCTYPE html>
       renderer.render(scene, camera)
     }
 
-    // 眨眼（用缩放头部 Y 轴模拟）
+    // 眨眼
     function startBlinking() {
       stopBlinking()
       scheduleBlink()
@@ -211,58 +253,73 @@ const WEBVIEW_HTML = `<!DOCTYPE html>
     }
 
     function doBlink() {
-      if (!placeholderHead) return
-      const originalScaleY = placeholderHead.scale.y
-      placeholderHead.scale.y = 0.7
+      if (!currentVRM) {
+        // fallback 到占位体眨眼
+        if (placeholderHead) {
+          placeholderHead.scale.y = 0.7
+          setTimeout(() => { if (placeholderHead) placeholderHead.scale.y = 1 }, 150)
+        }
+        return
+      }
+      // VRM blink expression
+      currentVRM.expressionManager.setValue('blink', 1.0)
       setTimeout(() => {
-        if (placeholderHead) placeholderHead.scale.y = originalScaleY
+        if (currentVRM) currentVRM.expressionManager.setValue('blink', 0.0)
       }, 150)
     }
 
-    // 表情（占位体用颜色变化模拟）
+    // 表情控制
     function resetExpression() {
-      if (placeholderHead) {
-        placeholderHead.material.color.setHex(0xffcc99)
+      if (currentVRM) {
+        currentVRM.expressionManager.setValue('happy', 0)
+        currentVRM.expressionManager.setValue('angry', 0)
+        currentVRM.expressionManager.setValue('sad', 0)
+        currentVRM.expressionManager.setValue('surprised', 0)
+        // 重置头部旋转
+        const head = currentVRM.humanoid.getNormalizedBoneNode('head')
+        if (head) { head.rotation.z = 0; head.rotation.x = 0 }
       }
-      if (placeholderBody) {
-        placeholderBody.rotation.z = 0
-      }
+      // 占位体 fallback
+      if (placeholderHead) placeholderHead.material.color.setHex(0xffcc99)
+      if (placeholderBody) placeholderBody.rotation.z = 0
     }
 
     function setListeningExpression() {
-      if (placeholderHead) {
-        // 微微亮一点表示关注
-        placeholderHead.material.color.setHex(0xffd9a8)
+      if (currentVRM) {
+        // 微微惊讶 = 关注
+        currentVRM.expressionManager.setValue('surprised', 0.2)
       }
+      if (placeholderHead) placeholderHead.material.color.setHex(0xffd9a8)
     }
 
     function setThinkingExpression() {
-      if (placeholderHead) {
-        // 稍微偏暗调表示思考
-        placeholderHead.material.color.setHex(0xeeccaa)
+      if (currentVRM) {
+        // 微微歪头
+        const head = currentVRM.humanoid.getNormalizedBoneNode('head')
+        if (head) { head.rotation.z = 0.08 }
       }
-      // 微微歪头
-      if (placeholderBody) {
-        placeholderBody.rotation.z = 0.05
-      }
+      if (placeholderHead) placeholderHead.material.color.setHex(0xeeccaa)
+      if (placeholderBody) placeholderBody.rotation.z = 0.05
     }
 
     init()
   <\/script>
 </body>
 </html>`
+}
 
 export interface AvatarWebViewRef {
   sendMessage: (msg: { type: string; data?: unknown }) => void
 }
 
 interface AvatarWebViewProps {
+  modelUrl: string
   onReady?: () => void
   onError?: (error: string) => void
 }
 
 const AvatarWebView = forwardRef<AvatarWebViewRef, AvatarWebViewProps>(
-  function AvatarWebView({ onReady, onError }, ref) {
+  function AvatarWebView({ modelUrl, onReady, onError }, ref) {
     const webViewRef = useRef<WebView>(null)
 
     const sendMessage = useCallback((msg: { type: string; data?: unknown }) => {
@@ -288,7 +345,7 @@ const AvatarWebView = forwardRef<AvatarWebViewRef, AvatarWebViewProps>(
     return (
       <WebView
         ref={webViewRef}
-        source={{ html: WEBVIEW_HTML }}
+        source={{ html: getWebViewHTML(modelUrl) }}
         style={styles.webview}
         onMessage={handleMessage}
         javaScriptEnabled={true}

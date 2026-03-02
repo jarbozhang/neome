@@ -23,8 +23,19 @@
     import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader'
     import { VRMLoaderPlugin } from '@pixiv/three-vrm'
 
+    // 开发调试用 URL，实际运行时由 AvatarWebView.tsx 的 getWebViewHTML() 注入
+    const MODEL_URL = 'http://192.168.100.241:9527/assets/models/default.vrm'
+
     let scene, camera, renderer, currentVRM = null
+    let vrmScene = null
     const clock = new THREE.Clock()
+
+    // 状态机
+    let currentState = 'idle'
+    let breathingEnabled = true
+    let blinkTimer = null
+    let placeholderBody = null
+    let placeholderHead = null
 
     function init() {
       scene = new THREE.Scene()
@@ -40,14 +51,12 @@
       renderer.outputColorSpace = THREE.SRGBColorSpace
       document.body.appendChild(renderer.domElement)
 
-      // 光照
       const ambientLight = new THREE.AmbientLight(0xffffff, 0.6)
       scene.add(ambientLight)
       const dirLight = new THREE.DirectionalLight(0xffffff, 0.8)
       dirLight.position.set(1, 2, 1)
       scene.add(dirLight)
 
-      // 处理窗口大小变化
       window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight
         camera.updateProjectionMatrix()
@@ -79,7 +88,48 @@
 
     function handleMessage(msg) {
       console.log('WebView received:', msg.type, msg)
-      // 后续 Task 会添加更多消息处理
+      switch (msg.type) {
+        case 'set_state':
+          setState(msg.data)
+          break
+        case 'set_visemes':
+          // Phase 2 实现
+          break
+        case 'set_expression':
+          // Phase 2 实现
+          break
+      }
+    }
+
+    function setState(state) {
+      if (currentState === state) return
+      currentState = state
+      console.log('Avatar state:', state)
+
+      stopBlinking()
+
+      switch (state) {
+        case 'idle':
+          breathingEnabled = true
+          startBlinking()
+          resetExpression()
+          break
+        case 'listening':
+          breathingEnabled = true
+          startBlinking()
+          setListeningExpression()
+          break
+        case 'thinking':
+          breathingEnabled = true
+          setThinkingExpression()
+          break
+        case 'speaking':
+          breathingEnabled = true
+          startBlinking()
+          resetExpression()
+          // 口型驱动在 Phase 2 实现
+          break
+      }
     }
 
     async function loadVRM() {
@@ -87,29 +137,59 @@
       loader.register((parser) => new VRMLoaderPlugin(parser))
 
       try {
-        // 没有实际 VRM 模型文件时，用简单几何体占位
-        // 后续放入真实 VRM 文件后只需改 URL 并调用 loader.loadAsync(url)
-        createPlaceholderAvatar()
-        sendToRN({ type: 'ready', data: { placeholder: true } })
+        sendToRN({ type: 'loading', data: { status: 'loading' } })
+        const gltf = await loader.loadAsync(MODEL_URL)
+        currentVRM = gltf.userData.vrm
+        vrmScene = gltf.scene
+
+        // VRM 模型默认朝 +Z，旋转 180° 面向相机
+        vrmScene.rotation.y = Math.PI
+        scene.add(vrmScene)
+
+        // 移除占位体（如果有的话）
+        removePlaceholder()
+
+        sendToRN({ type: 'ready', data: { vrm: true } })
+        startBlinking()
       } catch (err) {
         console.error('Failed to load VRM:', err)
-        sendToRN({ type: 'error', data: { message: err.message } })
+        // 加载失败，使用占位体
+        createPlaceholderAvatar()
+        sendToRN({ type: 'ready', data: { placeholder: true, error: err.message } })
       }
     }
 
-    // 用简单几何体模拟人形占位（胶囊体 = 身体，球体 = 头）
+    function removePlaceholder() {
+      if (placeholderBody) {
+        scene.remove(placeholderBody)
+        placeholderBody.geometry.dispose()
+        placeholderBody.material.dispose()
+        placeholderBody = null
+      }
+      if (placeholderHead) {
+        scene.remove(placeholderHead)
+        placeholderHead.geometry.dispose()
+        placeholderHead.material.dispose()
+        placeholderHead = null
+      }
+    }
+
     function createPlaceholderAvatar() {
       const bodyGeometry = new THREE.CapsuleGeometry(0.15, 0.5, 4, 16)
       const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x6699cc })
       const body = new THREE.Mesh(bodyGeometry, bodyMaterial)
       body.position.set(0, 1.0, 0)
       scene.add(body)
+      placeholderBody = body
 
       const headGeometry = new THREE.SphereGeometry(0.12, 16, 16)
       const headMaterial = new THREE.MeshStandardMaterial({ color: 0xffcc99 })
       const head = new THREE.Mesh(headGeometry, headMaterial)
       head.position.set(0, 1.5, 0)
       scene.add(head)
+      placeholderHead = head
+
+      startBlinking()
     }
 
     function sendToRN(msg) {
@@ -121,10 +201,99 @@
     function animate() {
       requestAnimationFrame(animate)
       const delta = clock.getDelta()
+      const elapsed = clock.getElapsedTime()
+
       if (currentVRM) {
         currentVRM.update(delta)
+
+        // VRM 呼吸动画：微调 spine bone
+        if (breathingEnabled) {
+          const spine = currentVRM.humanoid.getNormalizedBoneNode('spine')
+          if (spine) {
+            spine.rotation.x = Math.sin(elapsed * 1.8) * 0.01
+          }
+        }
       }
+
+      // 占位体呼吸（fallback）
+      if (breathingEnabled && placeholderBody && placeholderHead && !currentVRM) {
+        const breathOffset = Math.sin(elapsed * 1.8) * 0.002
+        placeholderBody.position.y = 1.0 + breathOffset
+        placeholderHead.position.y = 1.5 + breathOffset
+      }
+
       renderer.render(scene, camera)
+    }
+
+    // 眨眼
+    function startBlinking() {
+      stopBlinking()
+      scheduleBlink()
+    }
+
+    function stopBlinking() {
+      if (blinkTimer) {
+        clearTimeout(blinkTimer)
+        blinkTimer = null
+      }
+    }
+
+    function scheduleBlink() {
+      const interval = 2000 + Math.random() * 4000
+      blinkTimer = setTimeout(() => {
+        doBlink()
+        scheduleBlink()
+      }, interval)
+    }
+
+    function doBlink() {
+      if (!currentVRM) {
+        // fallback 到占位体眨眼
+        if (placeholderHead) {
+          placeholderHead.scale.y = 0.7
+          setTimeout(() => { if (placeholderHead) placeholderHead.scale.y = 1 }, 150)
+        }
+        return
+      }
+      // VRM blink expression
+      currentVRM.expressionManager.setValue('blink', 1.0)
+      setTimeout(() => {
+        if (currentVRM) currentVRM.expressionManager.setValue('blink', 0.0)
+      }, 150)
+    }
+
+    // 表情控制
+    function resetExpression() {
+      if (currentVRM) {
+        currentVRM.expressionManager.setValue('happy', 0)
+        currentVRM.expressionManager.setValue('angry', 0)
+        currentVRM.expressionManager.setValue('sad', 0)
+        currentVRM.expressionManager.setValue('surprised', 0)
+        // 重置头部旋转
+        const head = currentVRM.humanoid.getNormalizedBoneNode('head')
+        if (head) { head.rotation.z = 0; head.rotation.x = 0 }
+      }
+      // 占位体 fallback
+      if (placeholderHead) placeholderHead.material.color.setHex(0xffcc99)
+      if (placeholderBody) placeholderBody.rotation.z = 0
+    }
+
+    function setListeningExpression() {
+      if (currentVRM) {
+        // 微微惊讶 = 关注
+        currentVRM.expressionManager.setValue('surprised', 0.2)
+      }
+      if (placeholderHead) placeholderHead.material.color.setHex(0xffd9a8)
+    }
+
+    function setThinkingExpression() {
+      if (currentVRM) {
+        // 微微歪头
+        const head = currentVRM.humanoid.getNormalizedBoneNode('head')
+        if (head) { head.rotation.z = 0.08 }
+      }
+      if (placeholderHead) placeholderHead.material.color.setHex(0xeeccaa)
+      if (placeholderBody) placeholderBody.rotation.z = 0.05
     }
 
     init()
