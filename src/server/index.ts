@@ -42,8 +42,9 @@ const start = async () => {
       })
     })
 
-    await app.listen({ port: 3000, host: '0.0.0.0' })
-    console.log('Server running on http://0.0.0.0:3000')
+    const port = Number(process.env.PORT) || 9527
+    await app.listen({ port, host: '0.0.0.0' })
+    console.log(`Server running on http://0.0.0.0:${port}`)
   } catch (err) {
     app.log.error(err)
     process.exit(1)

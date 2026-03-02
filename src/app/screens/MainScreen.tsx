@@ -5,7 +5,7 @@ import { useSession } from '../hooks/useSession'
 import { SessionState } from '../../shared/types'
 
 // 开发时使用本机 IP，后续可配置
-const SERVER_URL = 'ws://192.168.100.241:3000/ws'
+const SERVER_URL = 'ws://192.168.100.241:9527/ws'
 
 export default function MainScreen() {
   const { connected, state, transition } = useSession(SERVER_URL)
