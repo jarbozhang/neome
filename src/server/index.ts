@@ -1,0 +1,53 @@
+import Fastify from 'fastify'
+import websocket from '@fastify/websocket'
+import { WSMessage } from '../shared/types'
+
+const app = Fastify({ logger: true })
+
+const start = async () => {
+  try {
+    await app.register(websocket)
+
+    // Health check
+    app.get('/health', async () => {
+      return { status: 'ok' }
+    })
+
+    // WebSocket 路由（必须在 register(websocket) 之后注册）
+    app.get('/ws', { websocket: true }, (socket, req) => {
+      app.log.info('Client connected')
+
+      socket.on('message', (raw) => {
+        try {
+          const msg: WSMessage = JSON.parse(raw.toString())
+          app.log.info({ type: msg.type }, 'Received message')
+
+          if (msg.type === 'state_change') {
+            const state = (msg.payload as { state: string } | null)?.state
+            app.log.info({ state }, 'State changed')
+            // 回传确认（后续会改为服务端主动触发状态变更）
+            socket.send(JSON.stringify(msg))
+          }
+        } catch (err) {
+          app.log.error(err, 'Failed to parse message')
+        }
+      })
+
+      socket.on('close', () => {
+        app.log.info('Client disconnected')
+      })
+
+      socket.on('error', (err) => {
+        app.log.error(err, 'WebSocket error')
+      })
+    })
+
+    await app.listen({ port: 3000, host: '0.0.0.0' })
+    console.log('Server running on http://0.0.0.0:3000')
+  } catch (err) {
+    app.log.error(err)
+    process.exit(1)
+  }
+}
+
+start()

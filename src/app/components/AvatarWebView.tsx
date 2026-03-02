@@ -1,0 +1,313 @@
+import React, { useRef, useCallback, forwardRef, useImperativeHandle } from 'react'
+import { StyleSheet } from 'react-native'
+import { WebView, WebViewMessageEvent } from 'react-native-webview'
+
+// WebView 加载的完整 HTML 内容（内联，避免 WebView 本地文件访问限制）
+const WEBVIEW_HTML = `<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <style>
+    * { margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; overflow: hidden; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://esm.sh/three@0.162.0",
+      "three/examples/jsm/loaders/GLTFLoader": "https://esm.sh/three@0.162.0/examples/jsm/loaders/GLTFLoader.js",
+      "@pixiv/three-vrm": "https://esm.sh/@pixiv/three-vrm@3.3.5"
+    }
+  }
+  <\/script>
+  <script type="module">
+    import * as THREE from 'three'
+    import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader'
+    import { VRMLoaderPlugin } from '@pixiv/three-vrm'
+
+    let scene, camera, renderer, currentVRM = null
+    const clock = new THREE.Clock()
+
+    // 状态机
+    let currentState = 'idle'
+    let breathingEnabled = true
+    let blinkTimer = null
+    let placeholderBody = null
+    let placeholderHead = null
+
+    function init() {
+      scene = new THREE.Scene()
+      scene.background = new THREE.Color(0xf0f0f0)
+
+      camera = new THREE.PerspectiveCamera(30, window.innerWidth / window.innerHeight, 0.1, 20)
+      camera.position.set(0, 1.3, 1.5)
+      camera.lookAt(0, 1.2, 0)
+
+      renderer = new THREE.WebGLRenderer({ antialias: true })
+      renderer.setSize(window.innerWidth, window.innerHeight)
+      renderer.setPixelRatio(window.devicePixelRatio)
+      renderer.outputColorSpace = THREE.SRGBColorSpace
+      document.body.appendChild(renderer.domElement)
+
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.6)
+      scene.add(ambientLight)
+      const dirLight = new THREE.DirectionalLight(0xffffff, 0.8)
+      dirLight.position.set(1, 2, 1)
+      scene.add(dirLight)
+
+      window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight
+        camera.updateProjectionMatrix()
+        renderer.setSize(window.innerWidth, window.innerHeight)
+      })
+
+      // 监听来自 RN 的消息（iOS）
+      window.addEventListener('message', (event) => {
+        try {
+          const msg = typeof event.data === 'string' ? JSON.parse(event.data) : event.data
+          handleMessage(msg)
+        } catch (e) {
+          console.error('Failed to parse message:', e)
+        }
+      })
+      // 监听来自 RN 的消息（Android）
+      document.addEventListener('message', (event) => {
+        try {
+          const msg = typeof event.data === 'string' ? JSON.parse(event.data) : event.data
+          handleMessage(msg)
+        } catch (e) {
+          console.error('Failed to parse message:', e)
+        }
+      })
+
+      loadVRM()
+      animate()
+    }
+
+    function handleMessage(msg) {
+      console.log('WebView received:', msg.type, msg)
+      switch (msg.type) {
+        case 'set_state':
+          setState(msg.data)
+          break
+        case 'set_visemes':
+          // Phase 2 实现
+          break
+        case 'set_expression':
+          // Phase 2 实现
+          break
+      }
+    }
+
+    function setState(state) {
+      if (currentState === state) return
+      currentState = state
+      console.log('Avatar state:', state)
+
+      stopBlinking()
+
+      switch (state) {
+        case 'idle':
+          breathingEnabled = true
+          startBlinking()
+          resetExpression()
+          break
+        case 'listening':
+          breathingEnabled = true
+          startBlinking()
+          setListeningExpression()
+          break
+        case 'thinking':
+          breathingEnabled = true
+          setThinkingExpression()
+          break
+        case 'speaking':
+          breathingEnabled = true
+          startBlinking()
+          resetExpression()
+          // 口型驱动在 Phase 2 实现
+          break
+      }
+    }
+
+    async function loadVRM() {
+      const loader = new GLTFLoader()
+      loader.register((parser) => new VRMLoaderPlugin(parser))
+
+      try {
+        createPlaceholderAvatar()
+        sendToRN({ type: 'ready', data: { placeholder: true } })
+      } catch (err) {
+        console.error('Failed to load VRM:', err)
+        sendToRN({ type: 'error', data: { message: err.message } })
+      }
+    }
+
+    function createPlaceholderAvatar() {
+      const bodyGeometry = new THREE.CapsuleGeometry(0.15, 0.5, 4, 16)
+      const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x6699cc })
+      const body = new THREE.Mesh(bodyGeometry, bodyMaterial)
+      body.position.set(0, 1.0, 0)
+      scene.add(body)
+      placeholderBody = body
+
+      const headGeometry = new THREE.SphereGeometry(0.12, 16, 16)
+      const headMaterial = new THREE.MeshStandardMaterial({ color: 0xffcc99 })
+      const head = new THREE.Mesh(headGeometry, headMaterial)
+      head.position.set(0, 1.5, 0)
+      scene.add(head)
+      placeholderHead = head
+
+      startBlinking()
+    }
+
+    function sendToRN(msg) {
+      if (window.ReactNativeWebView) {
+        window.ReactNativeWebView.postMessage(JSON.stringify(msg))
+      }
+    }
+
+    function animate() {
+      requestAnimationFrame(animate)
+      const delta = clock.getDelta()
+      const elapsed = clock.getElapsedTime()
+
+      if (currentVRM) {
+        currentVRM.update(delta)
+      }
+
+      // 呼吸动画（占位体）
+      if (breathingEnabled && placeholderBody && placeholderHead) {
+        const breathOffset = Math.sin(elapsed * 1.8) * 0.002
+        placeholderBody.position.y = 1.0 + breathOffset
+        placeholderHead.position.y = 1.5 + breathOffset
+      }
+
+      renderer.render(scene, camera)
+    }
+
+    // 眨眼（用缩放头部 Y 轴模拟）
+    function startBlinking() {
+      stopBlinking()
+      scheduleBlink()
+    }
+
+    function stopBlinking() {
+      if (blinkTimer) {
+        clearTimeout(blinkTimer)
+        blinkTimer = null
+      }
+    }
+
+    function scheduleBlink() {
+      const interval = 2000 + Math.random() * 4000
+      blinkTimer = setTimeout(() => {
+        doBlink()
+        scheduleBlink()
+      }, interval)
+    }
+
+    function doBlink() {
+      if (!placeholderHead) return
+      const originalScaleY = placeholderHead.scale.y
+      placeholderHead.scale.y = 0.7
+      setTimeout(() => {
+        if (placeholderHead) placeholderHead.scale.y = originalScaleY
+      }, 150)
+    }
+
+    // 表情（占位体用颜色变化模拟）
+    function resetExpression() {
+      if (placeholderHead) {
+        placeholderHead.material.color.setHex(0xffcc99)
+      }
+      if (placeholderBody) {
+        placeholderBody.rotation.z = 0
+      }
+    }
+
+    function setListeningExpression() {
+      if (placeholderHead) {
+        // 微微亮一点表示关注
+        placeholderHead.material.color.setHex(0xffd9a8)
+      }
+    }
+
+    function setThinkingExpression() {
+      if (placeholderHead) {
+        // 稍微偏暗调表示思考
+        placeholderHead.material.color.setHex(0xeeccaa)
+      }
+      // 微微歪头
+      if (placeholderBody) {
+        placeholderBody.rotation.z = 0.05
+      }
+    }
+
+    init()
+  <\/script>
+</body>
+</html>`
+
+export interface AvatarWebViewRef {
+  sendMessage: (msg: { type: string; data?: unknown }) => void
+}
+
+interface AvatarWebViewProps {
+  onReady?: () => void
+  onError?: (error: string) => void
+}
+
+const AvatarWebView = forwardRef<AvatarWebViewRef, AvatarWebViewProps>(
+  function AvatarWebView({ onReady, onError }, ref) {
+    const webViewRef = useRef<WebView>(null)
+
+    const sendMessage = useCallback((msg: { type: string; data?: unknown }) => {
+      webViewRef.current?.postMessage(JSON.stringify(msg))
+    }, [])
+
+    useImperativeHandle(ref, () => ({ sendMessage }), [sendMessage])
+
+    const handleMessage = useCallback((event: WebViewMessageEvent) => {
+      try {
+        const msg = JSON.parse(event.nativeEvent.data)
+        console.log('[AvatarWebView] Received:', msg.type)
+        if (msg.type === 'ready') {
+          onReady?.()
+        } else if (msg.type === 'error') {
+          onError?.(msg.data?.message)
+        }
+      } catch (e) {
+        console.error('[AvatarWebView] Parse error:', e)
+      }
+    }, [onReady, onError])
+
+    return (
+      <WebView
+        ref={webViewRef}
+        source={{ html: WEBVIEW_HTML }}
+        style={styles.webview}
+        onMessage={handleMessage}
+        javaScriptEnabled={true}
+        domStorageEnabled={true}
+        allowFileAccess={true}
+        originWhitelist={['*']}
+        mixedContentMode="compatibility"
+        allowsInlineMediaPlayback={true}
+        mediaPlaybackRequiresUserAction={false}
+      />
+    )
+  }
+)
+
+export default AvatarWebView
+
+const styles = StyleSheet.create({
+  webview: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+})
