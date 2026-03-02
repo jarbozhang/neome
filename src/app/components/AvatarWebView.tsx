@@ -143,7 +143,12 @@ function getWebViewHTML(modelUrl: string): string {
       loader.register((parser) => new VRMLoaderPlugin(parser))
 
       try {
-        sendToRN({ type: 'loading', data: { status: 'loading' } })
+        sendToRN({ type: 'loading', data: { status: 'loading', url: MODEL_URL } })
+
+        // 先测试 URL 是否可达
+        const testResp = await fetch(MODEL_URL, { method: 'HEAD' })
+        sendToRN({ type: 'loading', data: { status: 'url_reachable', httpStatus: testResp.status } })
+
         const gltf = await loader.loadAsync(MODEL_URL)
         currentVRM = gltf.userData.vrm
         vrmScene = gltf.scene
@@ -161,7 +166,7 @@ function getWebViewHTML(modelUrl: string): string {
         console.error('Failed to load VRM:', err)
         // 加载失败，使用占位体
         createPlaceholderAvatar()
-        sendToRN({ type: 'ready', data: { placeholder: true, error: err.message } })
+        sendToRN({ type: 'ready', data: { placeholder: true, error: String(err) } })
       }
     }
 
@@ -314,12 +319,13 @@ export interface AvatarWebViewRef {
 
 interface AvatarWebViewProps {
   modelUrl: string
+  serverBaseUrl: string
   onReady?: () => void
   onError?: (error: string) => void
 }
 
 const AvatarWebView = forwardRef<AvatarWebViewRef, AvatarWebViewProps>(
-  function AvatarWebView({ modelUrl, onReady, onError }, ref) {
+  function AvatarWebView({ modelUrl, serverBaseUrl, onReady, onError }, ref) {
     const webViewRef = useRef<WebView>(null)
 
     const sendMessage = useCallback((msg: { type: string; data?: unknown }) => {
@@ -333,8 +339,12 @@ const AvatarWebView = forwardRef<AvatarWebViewRef, AvatarWebViewProps>(
         const msg = JSON.parse(event.nativeEvent.data)
         console.log('[AvatarWebView] Received:', msg.type)
         if (msg.type === 'ready') {
+          console.log('[AvatarWebView] Ready data:', JSON.stringify(msg.data))
           onReady?.()
+        } else if (msg.type === 'loading') {
+          console.log('[AvatarWebView] Loading:', JSON.stringify(msg.data))
         } else if (msg.type === 'error') {
+          console.error('[AvatarWebView] Error:', msg.data?.message)
           onError?.(msg.data?.message)
         }
       } catch (e) {
@@ -345,7 +355,7 @@ const AvatarWebView = forwardRef<AvatarWebViewRef, AvatarWebViewProps>(
     return (
       <WebView
         ref={webViewRef}
-        source={{ html: getWebViewHTML(modelUrl) }}
+        source={{ html: getWebViewHTML(modelUrl), baseUrl: serverBaseUrl }}
         style={styles.webview}
         onMessage={handleMessage}
         javaScriptEnabled={true}

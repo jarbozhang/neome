@@ -5,8 +5,11 @@ import { useSession } from '../hooks/useSession'
 import { SessionState } from '../../shared/types'
 
 // 开发时使用本机 IP，后续可配置
-const SERVER_URL = 'ws://192.168.100.241:9527/ws'
-const MODEL_URL = 'http://192.168.100.241:9527/assets/models/default.vrm'
+const SERVER_HOST = '192.168.100.241'
+const SERVER_PORT = 9527
+const SERVER_BASE = `http://${SERVER_HOST}:${SERVER_PORT}`
+const SERVER_URL = `ws://${SERVER_HOST}:${SERVER_PORT}/ws`
+const MODEL_URL = `${SERVER_BASE}/assets/models/default.vrm`
 
 export default function MainScreen() {
   const { connected, state, transition } = useSession(SERVER_URL)
@@ -33,7 +36,7 @@ export default function MainScreen() {
 
   return (
     <View style={styles.container}>
-      <AvatarWebView ref={avatarRef} modelUrl={MODEL_URL} onReady={handleReady} onError={handleError} />
+      <AvatarWebView ref={avatarRef} modelUrl={MODEL_URL} serverBaseUrl={SERVER_BASE} onReady={handleReady} onError={handleError} />
       {/* Debug 信息 */}
       <View style={styles.debugBar}>
         <Text style={styles.debugText}>

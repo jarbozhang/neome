@@ -1,5 +1,6 @@
 import path from 'path'
 import Fastify from 'fastify'
+import cors from '@fastify/cors'
 import fastifyStatic from '@fastify/static'
 import websocket from '@fastify/websocket'
 import { WSMessage } from '../shared/types'
@@ -8,6 +9,8 @@ const app = Fastify({ logger: true })
 
 const start = async () => {
   try {
+    // CORS — 允许 WebView (origin: null) 和局域网访问
+    await app.register(cors, { origin: true })
     await app.register(websocket)
 
     // 托管 assets 静态文件（VRM 模型等）
