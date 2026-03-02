@@ -143,11 +143,7 @@ function getWebViewHTML(modelUrl: string): string {
       loader.register((parser) => new VRMLoaderPlugin(parser))
 
       try {
-        sendToRN({ type: 'loading', data: { status: 'loading', url: MODEL_URL } })
-
-        // 先测试 URL 是否可达
-        const testResp = await fetch(MODEL_URL, { method: 'HEAD' })
-        sendToRN({ type: 'loading', data: { status: 'url_reachable', httpStatus: testResp.status } })
+        sendToRN({ type: 'loading', data: { status: 'loading' } })
 
         const gltf = await loader.loadAsync(MODEL_URL)
         currentVRM = gltf.userData.vrm
@@ -157,10 +153,46 @@ function getWebViewHTML(modelUrl: string): string {
         vrmScene.rotation.y = Math.PI
         scene.add(vrmScene)
 
+        sendToRN({ type: 'loading', data: { status: 'vrm_loaded' } })
+
+        // 强制更新世界矩阵
+        vrmScene.updateMatrixWorld(true)
+
+        // 半身特写相机：头部到腰部
+        // 模型身高 ~1.6, 头顶 y≈1.56, 腰部 y≈0.85
+        camera.position.set(0, 1.25, 1.8)
+        camera.lookAt(0, 1.15, 0)
+        camera.fov = 28
+        camera.near = 0.01
+        camera.far = 100
+        camera.updateProjectionMatrix()
+
+        // MToon 着色器在移动端 WebView 不兼容（贴图 premultiplied alpha 问题）
+        // Phase 1 用纯色渲染，Phase 4 再解决贴图兼容
+        vrmScene.traverse((child) => {
+          if (child.isMesh) {
+            child.frustumCulled = false
+            // 提取 MToon 颜色
+            const oldMat = child.material
+            let color = new THREE.Color(0xddccbb) // 默认肤色
+            if (oldMat.color && (oldMat.color.r + oldMat.color.g + oldMat.color.b) > 0.05) {
+              color.copy(oldMat.color)
+            } else if (oldMat.uniforms?.litFactor?.value) {
+              color.copy(oldMat.uniforms.litFactor.value)
+            }
+            child.material = new THREE.MeshStandardMaterial({
+              color,
+              side: THREE.DoubleSide,
+              roughness: 0.5,
+              metalness: 0.0,
+            })
+          }
+        })
+
         // 移除占位体（如果有的话）
         removePlaceholder()
 
-        sendToRN({ type: 'ready', data: { vrm: true } })
+        sendToRN({ type: 'ready', data: { vrm: true, childCount: vrmScene.children.length } })
         startBlinking()
       } catch (err) {
         console.error('Failed to load VRM:', err)
