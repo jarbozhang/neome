@@ -8,8 +8,14 @@
     "outDir": "./dist",
     "rootDir": "..",
     "paths": {
-      "@shared/*": ["../shared/*"]
+      "@shared/*": [
+        "../shared/*"
+      ]
     }
   },
-  "include": ["../shared/**/*.ts", "./**/*.ts"]
+  "include": [
+    "../shared/**/*.ts",
+    "./**/*.ts"
+  ],
+  "extends": "expo/tsconfig.base"
 }
