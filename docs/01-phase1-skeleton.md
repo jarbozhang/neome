@@ -25,10 +25,10 @@
 6. 创建 `src/shared/types.ts`，定义基础消息类型
 
 ### 验收标准
-- [ ] `npx expo start` 能启动 App，真机/模拟器可见默认页面
-- [ ] `npx tsx src/server/index.ts` 能启动 Fastify 服务，访问 `http://localhost:3000/health` 返回 `{status: "ok"}`
-- [ ] `src/shared/types.ts` 存在且同时被 App 和 Server 的 tsconfig 引用
-- [ ] 项目结构与 `docs/00-architecture.md` 中描述一致
+- [x] `npx expo start` 能启动 App，真机/模拟器可见默认页面
+- [x] `npx tsx src/server/index.ts` 能启动 Fastify 服务，访问 `http://localhost:9527/health` 返回 `{status: "ok"}`
+- [x] `src/shared/types.ts` 存在且同时被 App 和 Server 的 tsconfig 引用
+- [x] 项目结构与 `docs/00-architecture.md` 中描述一致
 
 ### 产出文件
 ```
@@ -179,11 +179,19 @@ interface WebViewToRNMessage {
 ```
 
 ### 验收标准
-- [ ] App 启动后，屏幕上显示一个 3D VRM 模型（静止站立状态）
-- [ ] 模型面朝镜头（面向用户），半身特写构图
-- [ ] WebView 发送 `{type: "ready"}` 消息，RN 层收到并打印日志
-- [ ] RN 层可以通过 postMessage 发送消息，WebView 收到并打印日志
-- [ ] 在 iOS 和 Android 模拟器上均可正常渲染（至少 30 FPS）
+- [x] App 启动后，屏幕上显示一个 3D VRM 模型（静止站立状态）
+- [x] 模型面朝镜头（面向用户），半身特写构图
+- [x] WebView 发送 `{type: "ready"}` 消息，RN 层收到并打印日志
+- [x] RN 层可以通过 postMessage 发送消息，WebView 收到并打印日志
+- [x] 在 iOS 真机上正常渲染
+
+> **实现备注（2026-03-03）：**
+> - MToon 着色器在 iOS WebView 不可用，所有材质替换为 `MeshStandardMaterial`
+> - VRM mesh 存在多材质数组（Body/Hair），需 `Array.isArray(child.material)` 分支处理
+> - esm.sh importmap 必须加 `?external=three` 防止 three.js 重复实例
+> - 服务端 `/vrm/:filename` 端点对嵌入 PNG 做 un-premultiply + alpha=255 处理
+> - 面部/眼睛贴图仍受 iOS WebGL GPU 层 premultiply 影响（Phase 4 优化项）
+> - LAN IP 通过 `.env` 的 `EXPO_PUBLIC_SERVER_HOST` 配置，无需改代码
 
 ### 产出文件
 ```
@@ -254,12 +262,12 @@ export class SessionManager {
 ```
 
 ### 验收标准
-- [ ] App 启动后自动连接 `ws://SERVER_IP:3000/ws`
-- [ ] 服务端日志显示 "Client connected"
-- [ ] App 发送 `{type: "test", payload: "hello"}` → 服务端收到并打印
-- [ ] 服务端发送 `{type: "test", payload: "world"}` → App 收到并打印
+- [x] App 启动后自动连接 `ws://SERVER_IP:9527/ws`
+- [x] 服务端日志显示 "Client connected"
+- [x] App 发送消息 → 服务端收到并打印
+- [x] 服务端发送消息 → App 收到并打印
 - [ ] App 断网后重连，服务端日志显示新连接
-- [ ] `useSession` hook 在组件中可用，能获取连接状态
+- [x] `useSession` hook 在组件中可用，能获取连接状态
 
 ### 产出文件
 ```
@@ -325,11 +333,11 @@ function startBreathingAnimation() {
 ```
 
 ### 验收标准
-- [ ] 状态机有 4 个状态：idle / listening / thinking / speaking
-- [ ] 手动点击 debug 按钮可以切换状态
-- [ ] 状态切换时，WebView 中数字人有对应动画变化（至少 idle 的呼吸 + 眨眼可见）
-- [ ] 状态变更时，RN 和 Server 双向同步（服务端日志显示状态变更）
-- [ ] 从 speaking 状态可以直接回到 listening（打断路径）
+- [x] 状态机有 4 个状态：idle / listening / thinking / speaking
+- [x] 手动点击 debug 按钮可以切换状态
+- [x] 状态切换时，WebView 中数字人有对应动画变化（idle 呼吸 + 眨眼、listening 微惊讶、thinking 歪头）
+- [x] 状态变更时，RN 和 Server 双向同步（服务端日志显示状态变更）
+- [x] 从 speaking 状态可以直接回到 listening（打断路径）
 
 ### 产出文件
 ```

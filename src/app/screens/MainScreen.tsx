@@ -4,12 +4,12 @@ import AvatarWebView, { AvatarWebViewRef } from '../components/AvatarWebView'
 import { useSession } from '../hooks/useSession'
 import { SessionState } from '../../shared/types'
 
-// 开发时使用本机 IP，后续可配置
-const SERVER_HOST = '192.168.100.241'
-const SERVER_PORT = 9527
+// 从 .env 读取，改 IP 只需改 .env 文件
+const SERVER_HOST = process.env.EXPO_PUBLIC_SERVER_HOST || '192.168.100.241'
+const SERVER_PORT = Number(process.env.EXPO_PUBLIC_SERVER_PORT) || 9527
 const SERVER_BASE = `http://${SERVER_HOST}:${SERVER_PORT}`
 const SERVER_URL = `ws://${SERVER_HOST}:${SERVER_PORT}/ws`
-const MODEL_URL = `${SERVER_BASE}/assets/models/default.vrm`
+const MODEL_URL = `${SERVER_BASE}/vrm/default.vrm`
 
 export default function MainScreen() {
   const { connected, state, transition } = useSession(SERVER_URL)

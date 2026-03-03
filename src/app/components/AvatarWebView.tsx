@@ -20,8 +20,8 @@ function getWebViewHTML(modelUrl: string): string {
   {
     "imports": {
       "three": "https://esm.sh/three@0.162.0",
-      "three/examples/jsm/loaders/GLTFLoader": "https://esm.sh/three@0.162.0/examples/jsm/loaders/GLTFLoader.js",
-      "@pixiv/three-vrm": "https://esm.sh/@pixiv/three-vrm@3.3.5"
+      "three/examples/jsm/loaders/GLTFLoader": "https://esm.sh/three@0.162.0/examples/jsm/loaders/GLTFLoader.js?external=three",
+      "@pixiv/three-vrm": "https://esm.sh/@pixiv/three-vrm@3.3.5?external=three"
     }
   }
   <\/script>
@@ -51,7 +51,7 @@ function getWebViewHTML(modelUrl: string): string {
       camera.position.set(0, 1.3, 1.5)
       camera.lookAt(0, 1.2, 0)
 
-      renderer = new THREE.WebGLRenderer({ antialias: true })
+      renderer = new THREE.WebGLRenderer({ antialias: true, premultipliedAlpha: false })
       renderer.setSize(window.innerWidth, window.innerHeight)
       renderer.setPixelRatio(window.devicePixelRatio)
       renderer.outputColorSpace = THREE.SRGBColorSpace
@@ -149,7 +149,7 @@ function getWebViewHTML(modelUrl: string): string {
         currentVRM = gltf.userData.vrm
         vrmScene = gltf.scene
 
-        // VRM 模型默认朝 +Z，旋转 180° 面向相机
+        // VRM 标准：模型面向 +Z，相机在 +Z，旋转 180° 面向相机
         vrmScene.rotation.y = Math.PI
         scene.add(vrmScene)
 
@@ -158,34 +158,48 @@ function getWebViewHTML(modelUrl: string): string {
         // 强制更新世界矩阵
         vrmScene.updateMatrixWorld(true)
 
-        // 半身特写相机：头部到腰部
-        // 模型身高 ~1.6, 头顶 y≈1.56, 腰部 y≈0.85
-        camera.position.set(0, 1.25, 1.8)
-        camera.lookAt(0, 1.15, 0)
-        camera.fov = 28
+        // 半身特写相机
+        camera.position.set(0, 1.35, 1.5)
+        camera.lookAt(0, 1.25, 0)
+        camera.fov = 25
         camera.near = 0.01
         camera.far = 100
         camera.updateProjectionMatrix()
 
-        // MToon 着色器在移动端 WebView 不兼容（贴图 premultiplied alpha 问题）
-        // Phase 1 用纯色渲染，Phase 4 再解决贴图兼容
-        vrmScene.traverse((child) => {
-          if (child.isMesh) {
-            child.frustumCulled = false
-            // 提取 MToon 颜色
-            const oldMat = child.material
-            let color = new THREE.Color(0xddccbb) // 默认肤色
-            if (oldMat.color && (oldMat.color.r + oldMat.color.g + oldMat.color.b) > 0.05) {
-              color.copy(oldMat.color)
-            } else if (oldMat.uniforms?.litFactor?.value) {
-              color.copy(oldMat.uniforms.litFactor.value)
+        // MToon → MeshStandardMaterial (处理单材质和多材质数组)
+        // TODO Phase 4: 眼睛半透明叠层被 iOS WebGL premultiply 压暗，需自定义 shader 或服务端特殊处理
+        function replaceMat(oldMat) {
+          let color = new THREE.Color(0xffffff)
+          if (oldMat.color) color.copy(oldMat.color)
+          else if (oldMat.uniforms?.litFactor?.value) color.copy(oldMat.uniforms.litFactor.value)
+          let tex = oldMat.map || null
+          if (!tex && oldMat.uniforms) {
+            for (const key of ['map', 'mainTex', '_MainTex', 'diffuse']) {
+              if (oldMat.uniforms[key]?.value?.isTexture) { tex = oldMat.uniforms[key].value; break }
             }
-            child.material = new THREE.MeshStandardMaterial({
-              color,
-              side: THREE.DoubleSide,
-              roughness: 0.5,
-              metalness: 0.0,
-            })
+          }
+          const mat = new THREE.MeshStandardMaterial({
+            color,
+            side: THREE.DoubleSide,
+            transparent: false,
+            opacity: 1.0,
+            roughness: 0.6,
+            metalness: 0.0,
+          })
+          if (tex) {
+            tex.premultiplyAlpha = false
+            tex.colorSpace = THREE.SRGBColorSpace
+            tex.needsUpdate = true
+            mat.map = tex
+          }
+          return mat
+        }
+        vrmScene.traverse((child) => {
+          if (child.isMesh && child.material) {
+            child.frustumCulled = false
+            child.visible = true
+            const mats = Array.isArray(child.material) ? child.material : [child.material]
+            child.material = mats.length === 1 ? replaceMat(mats[0]) : mats.map(m => replaceMat(m))
           }
         })
 
@@ -239,6 +253,13 @@ function getWebViewHTML(modelUrl: string): string {
       if (window.ReactNativeWebView) {
         window.ReactNativeWebView.postMessage(JSON.stringify(msg))
       }
+    }
+
+    // 转发 console.log 到 RN
+    const _origLog = console.log
+    console.log = function(...args) {
+      _origLog.apply(console, args)
+      sendToRN({ type: 'console', data: args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ') })
     }
 
     function animate() {
@@ -370,7 +391,13 @@ const AvatarWebView = forwardRef<AvatarWebViewRef, AvatarWebViewProps>(
       try {
         const msg = JSON.parse(event.nativeEvent.data)
         console.log('[AvatarWebView] Received:', msg.type)
-        if (msg.type === 'ready') {
+        if (msg.type === 'console') {
+          console.log('[WebView]', msg.data)
+        } else if (msg.type === 'meshDebug') {
+          const items = msg.data || []
+          console.log('[MeshDebug] Total meshes:', items.length)
+          items.forEach((info: string) => console.log('[MeshDebug]', info))
+        } else if (msg.type === 'ready') {
           console.log('[AvatarWebView] Ready data:', JSON.stringify(msg.data))
           onReady?.()
         } else if (msg.type === 'loading') {

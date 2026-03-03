@@ -443,3 +443,27 @@ src/app/screens/MainScreen.tsx      # 更新：自适应布局
 3. 点一个缺货的饮品 → "抱歉，XX 今天暂时缺货了，换一个试试？"
 4. 网络断开 → "网络连接中，请稍等..."
 ```
+
+---
+
+## 已知技术问题（Phase 1 遗留，Phase 4 解决）
+
+### VRM 贴图在 iOS WebView 中的渲染问题
+
+**现象：** 面部和眼睛贴图颜色偏暗/发黑，眼睛半透明叠层（虹膜、瞳孔、高光）几乎不可见。
+
+**根因：** iOS WebView 的 WebGL 实现在 GPU 层面强制对纹理做 premultiplied alpha 处理。即使：
+- 服务端已将 PNG 嵌入的 alpha 通道修复为 255（含 un-premultiply RGB）
+- Three.js 侧设置了 `texture.premultiplyAlpha = false`
+iOS WebGL 仍在 `texImage2D` 时对 RGB 做 premultiply，导致半透明区域颜色被压暗。
+
+**当前 workaround：**
+- MToon → MeshStandardMaterial 替换，保留贴图（`tex.premultiplyAlpha = false`）
+- Body/Hair 渲染正常，Face 偏暗但可接受
+- 眼睛黑色（半透明叠层严重受影响）
+
+**待探索方案：**
+1. 自定义 WebGL shader，在 fragment shader 中手动反 premultiply
+2. 服务端针对眼部贴图特殊处理（将半透明合并为不透明）
+3. 使用 `<canvas>` 在客户端重新处理纹理后再上传 WebGL
+4. 探索 `UNPACK_PREMULTIPLY_ALPHA_WEBGL` 在 iOS WebView 中的行为
