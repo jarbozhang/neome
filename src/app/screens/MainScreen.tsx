@@ -2,6 +2,7 @@ import React, { useCallback, useRef, useEffect } from 'react'
 import { StyleSheet, View, Text, TouchableOpacity } from 'react-native'
 import AvatarWebView, { AvatarWebViewRef } from '../components/AvatarWebView'
 import { useSession } from '../hooks/useSession'
+import { useAudio } from '../hooks/useAudio'
 import { SessionState } from '../../shared/types'
 
 // 从 .env 读取，改 IP 只需改 .env 文件
@@ -13,12 +14,27 @@ const MODEL_URL = `${SERVER_BASE}/vrm/default.vrm`
 
 export default function MainScreen() {
   const { connected, state, transition } = useSession(SERVER_URL)
+  const { startCapture, stopCapture, clearPlayback } = useAudio()
   const avatarRef = useRef<AvatarWebViewRef>(null)
 
-  // 状态变更时通知 WebView
+  // 连接成功后自动开始音频采集
+  useEffect(() => {
+    if (connected) {
+      startCapture()
+    } else {
+      stopCapture()
+    }
+  }, [connected, startCapture, stopCapture])
+
+  // 状态变更时通知 WebView + 处理打断
   useEffect(() => {
     avatarRef.current?.sendMessage({ type: 'set_state', data: state })
-  }, [state])
+
+    // 从 speaking 切到 listening 说明发生了打断，清空播放队列
+    if (state === 'listening') {
+      clearPlayback()
+    }
+  }, [state, clearPlayback])
 
   const handleReady = useCallback(() => {
     console.log('[MainScreen] Avatar WebView ready')

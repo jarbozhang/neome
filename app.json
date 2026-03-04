@@ -13,14 +13,18 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.neome.app"
+      "bundleIdentifier": "com.neome.app",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "NeoMe 需要麦克风权限来进行语音点单"
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "com.neome.app"
+      "package": "com.neome.app",
+      "permissions": ["android.permission.RECORD_AUDIO"]
     },
     "web": {
       "favicon": "./assets/favicon.png"

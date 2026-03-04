@@ -4,15 +4,21 @@
   "private": true,
   "scripts": {
     "dev": "tsx watch index.ts",
-    "start": "tsx index.ts"
+    "start": "tsx index.ts",
+    "android": "expo run:android",
+    "ios": "expo run:ios"
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",
     "@fastify/static": "^9.0.0",
     "@fastify/websocket": "^11.0.0",
     "better-sqlite3": "^11.0.0",
+    "dotenv": "^17.3.1",
     "fastify": "^5.0.0",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "expo": "~54.0.33",
+    "react": "19.1.0",
+    "react-native": "0.81.5"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",

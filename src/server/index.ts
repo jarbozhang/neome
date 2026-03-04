@@ -1,4 +1,7 @@
+import dotenv from 'dotenv'
 import path from 'path'
+
+dotenv.config({ path: path.resolve(__dirname, '../../.env') })
 import fs from 'fs'
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
@@ -6,6 +9,7 @@ import fastifyStatic from '@fastify/static'
 import websocket from '@fastify/websocket'
 import sharp from 'sharp'
 import { WSMessage } from '../shared/types'
+import { VoiceSession } from './voiceSession'
 
 const app = Fastify({ logger: true })
 
@@ -179,16 +183,33 @@ const start = async () => {
     app.get('/ws', { websocket: true }, (socket, req) => {
       app.log.info('Client connected')
 
+      const voiceSession = new VoiceSession(socket)
+      voiceSession.start().catch(err => {
+        app.log.error(err, 'VoiceSession start failed')
+      })
+
       socket.on('message', (raw) => {
         try {
           const msg: WSMessage = JSON.parse(raw.toString())
-          app.log.info({ type: msg.type }, 'Received message')
 
-          if (msg.type === 'state_change') {
-            const state = (msg.payload as { state: string } | null)?.state
-            app.log.info({ state }, 'State changed')
-            // 回传确认（后续会改为服务端主动触发状态变更）
-            socket.send(JSON.stringify(msg))
+          switch (msg.type) {
+            case 'audio_chunk': {
+              const payload = msg.payload as { audio: string }
+              voiceSession.appendAudio(payload.audio)
+              break
+            }
+            case 'interrupt': {
+              voiceSession.interrupt()
+              break
+            }
+            case 'state_change': {
+              // Phase 2: 客户端 state_change 仅做日志，服务端权威驱动
+              const state = (msg.payload as { state: string } | null)?.state
+              app.log.info({ state }, 'Client state_change (logged only)')
+              break
+            }
+            default:
+              app.log.info({ type: msg.type }, 'Unhandled message type')
           }
         } catch (err) {
           app.log.error(err, 'Failed to parse message')
@@ -197,10 +218,12 @@ const start = async () => {
 
       socket.on('close', () => {
         app.log.info('Client disconnected')
+        voiceSession.destroy()
       })
 
       socket.on('error', (err) => {
         app.log.error(err, 'WebSocket error')
+        voiceSession.destroy()
       })
     })
 
