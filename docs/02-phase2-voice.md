@@ -133,13 +133,13 @@ export class VoiceSession {
 ```
 
 ### 验收标准
-- [ ] 后端启动时能读取 `.env` 中的 `DOUBAO_API_KEY`
-- [ ] 客户端 WebSocket 连接后，后端自动创建豆包语音 session
-- [ ] 向后端发送模拟音频数据（可用预录制的 PCM 文件），豆包返回 ASR 文本
-- [ ] ASR 文本通过 WebSocket 转发到客户端
-- [ ] 豆包的 TTS 音频通过 WebSocket 转发到客户端
-- [ ] 发送 `interrupt` 消息后，豆包停止当前回复
-- [ ] 客户端断连后，豆包 session 自动清理
+- [x] 后端启动时能读取 `.env` 中的 `DOUBAO_API_KEY` *(已实现：读取 DOUBAO_ACCESS_TOKEN/APP_KEY/APP_ID)*
+- [x] 客户端 WebSocket 连接后，后端自动创建豆包语音 session *(已实现：VoiceSession.start() 自动连接)*
+- [ ] 向后端发送模拟音频数据（可用预录制的 PCM 文件），豆包返回 ASR 文本 *(待真机验证)*
+- [x] ASR 文本通过 WebSocket 转发到客户端 *(已实现：handleBusinessEvent)*
+- [x] 豆包的 TTS 音频通过 WebSocket 转发到客户端 *(已实现：handleServerAudio)*
+- [x] 发送 `interrupt` 消息后，豆包停止当前回复 *(已实现：FinishSession+StartSession)*
+- [x] 客户端断连后，豆包 session 自动清理 *(已实现：socket.on('close') → destroy())*
 
 ### 产出文件
 ```
@@ -256,12 +256,12 @@ class AudioQueue {
 ```
 
 ### 验收标准
-- [ ] App 请求麦克风权限，用户授权后开始录音
-- [ ] 对着手机说话，服务端日志显示收到 `audio_chunk` 消息
-- [ ] 服务端返回的 TTS 音频能在 App 中播放出声
-- [ ] 数字人说话时（speaking 状态），用户大声说话触发打断
-- [ ] 打断后立即停止音频播放，切换到 listening 状态
-- [ ] 音频播放是流式的（不需要等全部 TTS 完成才开始播放）
+- [x] App 请求麦克风权限，用户授权后开始录音 *(已实现：useAudio + app.json 权限声明)*
+- [ ] 对着手机说话，服务端日志显示收到 `audio_chunk` 消息 *(待真机验证)*
+- [ ] 服务端返回的 TTS 音频能在 App 中播放出声 *(待真机验证)*
+- [x] 数字人说话时（speaking 状态），用户大声说话触发打断 *(已实现：VAD RMS 阈值检测)*
+- [x] 打断后立即停止音频播放，切换到 listening 状态 *(已实现：clearPlayback + generation)*
+- [x] 音频播放是流式的（不需要等全部 TTS 完成才开始播放） *(已实现：PLAYBACK_START_CHUNKS=3)*
 
 ### 产出文件
 ```
