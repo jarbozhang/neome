@@ -6,7 +6,7 @@ type MessageHandler = (msg: WSMessage) => void
 const VALID_TRANSITIONS: Record<SessionState, SessionState[]> = {
   idle: ['listening'],
   listening: ['thinking', 'idle'],
-  thinking: ['speaking', 'idle'],
+  thinking: ['speaking', 'listening', 'idle'],
   speaking: ['listening', 'idle'],
 }
 
@@ -161,6 +161,7 @@ export class SessionManager {
 
   disconnect(): void {
     this.clearReconnectTimer()
+    this.isConnecting = false
     this.ws?.close()
     this.ws = null
   }

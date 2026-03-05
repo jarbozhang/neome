@@ -201,7 +201,7 @@ function buildStartSessionPayload(): Record<string, unknown> {
       },
     },
     tts: {
-      speaker: 'zh_female_shuangkuaisisi_moon_bigtts',
+      speaker: 'zh_female_vv_jupiter_bigtts',
       audio_config: {
         channel: 1,
         format: 'pcm',
@@ -375,6 +375,8 @@ export class VoiceSession {
       const ws = this.doubaoWs
       this.doubaoWs = null
 
+      ws.removeAllListeners()
+
       if (ws.readyState === WebSocket.OPEN) {
         try {
           // 如果有 session，先发 FinishSession
@@ -398,10 +400,10 @@ export class VoiceSession {
         }
         ws.close()
       } else if (ws.readyState === WebSocket.CONNECTING) {
-        ws.close()
+        // CONNECTING 状态下 close() 会抛错，监听 open 后再关闭
+        ws.on('open', () => { try { ws.close() } catch (_) {} })
+        ws.on('error', () => {})  // 防止未处理错误
       }
-
-      ws.removeAllListeners()
     }
 
     this.internalState = 'closed'
@@ -489,6 +491,7 @@ export class VoiceSession {
       // Error 帧
       const errMsg = realPayload.toString('utf-8')
       console.error('[VoiceSession] Server error frame:', errMsg)
+      // AudioIdleTimeout → 不自动重试，等待客户端重新连接
     } else {
       console.log('[VoiceSession] Unhandled msgType:', msgType.toString(16), 'event:', eventNum)
     }
@@ -552,26 +555,15 @@ export class VoiceSession {
 
   /** 处理业务层事件（ASR/TTS/Dialog 状态变更等） */
   private handleBusinessEvent(eventNum: number | null, json: Record<string, unknown>): void {
-    // 豆包 Dialogue API 的业务事件通过 json 里的字段区分
-    // 常见字段：result.text (ASR), result.audio (TTS), event_type 等
-    const result = json['result'] as Record<string, unknown> | undefined
-    const eventType = json['event_type'] as string | undefined || json['type'] as string | undefined
+    const extra = json['extra'] as Record<string, unknown> | undefined
 
-    // ASR 识别文本
-    if (result?.['asr_result']) {
-      const asrResult = result['asr_result'] as Record<string, unknown>
-      const text = asrResult['text'] as string | undefined
-      const isFinal = asrResult['is_final'] as boolean | undefined
+    // Event 451: ASR 识别文本（豆包对话 API 格式：extra.origin_text + extra.endpoint）
+    if (eventNum === 451 && extra) {
+      const text = extra['origin_text'] as string | undefined
+      const isEndpoint = extra['endpoint'] as boolean | undefined
 
       if (text) {
-        // 用户说话中 → listening 状态
-        if (!isFinal) {
-          this.safeSendToClient({
-            type: 'state_change',
-            payload: { state: 'listening' as SessionState },
-            timestamp: Date.now(),
-          })
-        } else {
+        if (isEndpoint) {
           // 用户说话结束 → thinking 状态
           this.safeSendToClient({
             type: 'state_change',
@@ -583,7 +575,7 @@ export class VoiceSession {
           type: 'transcript',
           payload: {
             text,
-            isFinal: !!isFinal,
+            isFinal: !!isEndpoint,
             generation: this.generation,
           },
           timestamp: Date.now(),
@@ -591,63 +583,47 @@ export class VoiceSession {
       }
     }
 
-    // Dialog/TTS 文本回复
-    if (result?.['dialog_result']) {
-      const dialogResult = result['dialog_result'] as Record<string, unknown>
-      const text = dialogResult['reply'] as string | undefined
-      const isFinal = dialogResult['is_final'] as boolean | undefined
-
-      if (text) {
+    // Event 550: LLM 文本回复
+    if (eventNum === 550) {
+      const content = json['content'] as string | undefined
+      if (content) {
         this.safeSendToClient({
           type: 'transcript',
           payload: {
-            text,
-            isFinal: !!isFinal,
+            text: content,
+            isFinal: false,
             generation: this.generation,
           },
           timestamp: Date.now(),
         })
       }
-
-      // 对话结束
-      if (isFinal) {
-        this.isSpeaking = false
-        // reply_audio isFinal 标记由音频流结束决定，这里回到 listening
-        this.safeSendToClient({
-          type: 'state_change',
-          payload: { state: 'listening' as SessionState },
-          timestamp: Date.now(),
-        })
-      }
     }
 
-    // 处理其他常见事件类型
-    if (eventType) {
-      switch (eventType) {
-        case 'speech_start':
-          // 用户开始说话（VAD）
-          this.isSpeaking = false
-          this.safeSendToClient({
-            type: 'state_change',
-            payload: { state: 'listening' as SessionState },
-            timestamp: Date.now(),
-          })
-          break
-        case 'speech_end':
-          // 用户停止说话
-          this.safeSendToClient({
-            type: 'state_change',
-            payload: { state: 'thinking' as SessionState },
-            timestamp: Date.now(),
-          })
-          break
-        default:
-          console.log('[VoiceSession] Business event:', eventNum, 'type:', eventType)
-      }
+    // Event 559: LLM 文本回复结束
+    if (eventNum === 559) {
+      this.safeSendToClient({
+        type: 'transcript',
+        payload: {
+          text: '',
+          isFinal: true,
+          generation: this.generation,
+        },
+        timestamp: Date.now(),
+      })
+    }
+
+    // Event 359: TTS 音频结束 → 回到 listening
+    if (eventNum === 359) {
+      this.isSpeaking = false
+      this.safeSendToClient({
+        type: 'state_change',
+        payload: { state: 'listening' as SessionState },
+        timestamp: Date.now(),
+      })
     }
   }
 
-  /** 处理豆包发来的 TTS 音频帧 */
+  /** 处理豆包发来的 TTS 音频帧（float32 PCM → int16 PCM） */
   private handleServerAudio(pcmBuf: Buffer): void {
     if (!this.isSpeaking) {
       this.isSpeaking = true
@@ -658,8 +634,16 @@ export class VoiceSession {
       })
     }
 
-    // PCM → base64 → 发给客户端
-    const audioBase64 = pcmBuf.toString('base64')
+    // 豆包对话 API 返回 float32 PCM，转换为 int16 PCM
+    const floatCount = pcmBuf.length / 4
+    const int16Buf = Buffer.alloc(floatCount * 2)
+    for (let i = 0; i < floatCount; i++) {
+      let sample = pcmBuf.readFloatLE(i * 4)
+      sample = Math.max(-1.0, Math.min(1.0, sample))
+      int16Buf.writeInt16LE(Math.round(sample * 32767), i * 2)
+    }
+
+    const audioBase64 = int16Buf.toString('base64')
     this.safeSendToClient({
       type: 'reply_audio',
       payload: {

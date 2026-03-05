@@ -25,7 +25,7 @@ else
 fi
 
 echo "🚀 启动 Expo (port $EXPO_PORT)..."
-npx expo start --port $EXPO_PORT &
+npx expo start --port $EXPO_PORT --dev-client &
 EXPO_PID=$!
 
 echo ""

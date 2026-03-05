@@ -54,8 +54,19 @@
 
 **1. 草案 (主管)：** 编写严格的架构蓝图，参考 `docs/` 中对应 Phase 的 Task 文档。
 
-**2. 质询 (Codex 技能桥接)：**
-通过 `Skill("codex")` 在**前台**调用。配置 `gpt-5.3-codex`，`model_reasoning_effort: xhigh`。传递：
+**2. 质询 (Codex Skill)：**
+先通过 `Skill("codex")` 加载技能指南，然后通过 Bash 执行 `codex exec`。**不询问用户选模型/推理力度**（已预设）。
+```bash
+codex exec --skip-git-repo-check \
+  -m gpt-5.3-codex \
+  --config model_reasoning_effort="xhigh" \
+  --sandbox read-only \
+  -C /Users/jiabozhang/Documents/Develop/vibecoding/NeoMe \
+  "审计以下架构蓝图：<蓝图内容>
+  重点：WebSocket 状态同步、音频流竞争条件、状态机死锁、内存泄漏
+  输出格式：[组件] - [严重程度] - [缺陷] - [缓解措施]" 2>/dev/null
+```
+传递内容：
 * **目标范围：** 架构蓝图
 * **意图：** 例如"实现豆包实时语音 WebSocket 打断逻辑"
 * **重点：** 审计 WebSocket 状态同步、音频流竞争条件、状态机死锁、内存泄漏
@@ -63,7 +74,10 @@
 
 **3. 评估与辩论循环：**
 * **路径 A（客观错误）：** 立即接受并修复。
-* **路径 B（主观选择）：** 如果建议损害用户体验或增加不必要的延迟，予以反驳。
+* **路径 B（主观选择）：** 如果建议损害用户体验或增加不必要的延迟，予以反驳。通过 resume 继续讨论：
+  ```bash
+  echo "This is Claude (claude-opus-4-6) following up. 我不同意 [X]，因为 [证据]。" | codex exec --skip-git-repo-check resume --last 2>/dev/null
+  ```
 * **退出条件：**
   1. 达成共识 → 锁定计划 → 进入第 1 阶段
   2. 3 轮辩论未达成一致 → 升级给 boss 🛑
@@ -82,14 +96,30 @@
 5. **稳定性网关：** 代码功能正常 + lint 通过 + 满足 Task 验收标准
 
 ### 第 2 阶段："最终 Boss"审计 (Codex 5.3)
-仅在第 1 阶段通过后触发。通过 `Skill("codex")` 启动**全新会话**，`high` 推理工作量。传递：
+仅在第 1 阶段通过后触发。通过 `Skill("codex")` 加载技能后，启动**全新** `codex exec`（不 resume），`high` 推理力度。**不询问用户选模型**。
+```bash
+codex exec --skip-git-repo-check \
+  -m gpt-5.3-codex \
+  --config model_reasoning_effort="high" \
+  --sandbox read-only \
+  -C /Users/jiabozhang/Documents/Develop/vibecoding/NeoMe \
+  "审计以下代码变更，对照蓝图标准：<蓝图摘要>
+  变更文件：<文件列表>
+  Diff：<git diff 内容>
+  重点：WebSocket 状态同步、音频流中断、打断信号竞争、VRM blendshape 范围检查
+  输出格式：[文件/行] - [严重程度] - [缺陷] - [修复建议]" 2>/dev/null
+```
+传递内容：
 * **标准：** 第 0 阶段锁定蓝图
 * **目标范围 + Diff：** 具体文件和变更行
 * **重点：** WebSocket 状态同步、音频流中断、打断信号竞争、VRM blendshape 范围检查
 * **格式：** `[文件/行] - [严重程度] - [缺陷] - [修复建议]`
 
 **修复循环：**
-* 客观错误 → `debugger` 修复 → 恢复 Codex 会话重新审计
+* 客观错误 → `debugger` 修复 → 恢复 Codex 会话重新审计：
+  ```bash
+  echo "已修复以下缺陷：<修复摘要>。请重新审计变更文件。" | codex exec --skip-git-repo-check resume --last 2>/dev/null
+  ```
 * **退出条件：**
   1. 零客观缺陷 → 成功 ✅
   2. 仅剩主观反馈 → 升级给 boss 🛑
@@ -120,7 +150,12 @@ Co-Authored-By: Happy <yesreply@happy.engineering>
 ### Codex 不可用时的后备
 不要自我证明。立即升级给 boss。状态：已升级 🛑。
 
-> **技能名称：** 始终通过 `Skill("codex")` 调用，不是 `Skill("skill-codex")`。
+> **Codex Skill 使用规范：**
+> - 始终先通过 `Skill("codex")` 加载技能指南，再通过 Bash 执行 `codex exec`
+> - 所有 `codex exec` 命令必须带 `--skip-git-repo-check` 和 `2>/dev/null`
+> - 审计任务用 `--sandbox read-only`；需要修改代码时用 `--sandbox workspace-write --full-auto`
+> - 第 0 阶段和第 2 阶段的模型/推理力度已预设，**跳过** Skill 指南中默认的 AskUserQuestion 询问
+> - Resume 语法：`echo "prompt" | codex exec --skip-git-repo-check resume --last 2>/dev/null`
 
 ---
 

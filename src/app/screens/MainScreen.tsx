@@ -27,13 +27,15 @@ export default function MainScreen() {
   }, [connected, startCapture, stopCapture])
 
   // 状态变更时通知 WebView + 处理打断
+  const prevStateRef = useRef<SessionState>('idle')
   useEffect(() => {
     avatarRef.current?.sendMessage({ type: 'set_state', data: state })
 
-    // 从 speaking 切到 listening 说明发生了打断，清空播放队列
-    if (state === 'listening') {
+    // 仅在从 speaking 离开时清空播放队列（用户打断）
+    if (prevStateRef.current === 'speaking' && state === 'listening') {
       clearPlayback()
     }
+    prevStateRef.current = state
   }, [state, clearPlayback])
 
   const handleReady = useCallback(() => {

@@ -1,9 +1,16 @@
 import { useEffect, useRef, useCallback } from 'react'
-import LiveAudioStream from 'react-native-live-audio-stream'
 import { Audio } from 'expo-av'
 import { File, Paths } from 'expo-file-system/next'
 import { sessionManager } from '../services/SessionManager'
 import { ReplyAudioPayload } from '../../shared/types'
+
+// 动态导入原生模块，Expo Go 中不可用时降级
+let LiveAudioStream: any = null
+try {
+  LiveAudioStream = require('react-native-live-audio-stream').default
+} catch (_) {
+  console.warn('[useAudio] react-native-live-audio-stream not available (Expo Go?), audio capture disabled')
+}
 
 // ---------- 配置 ----------
 const CAPTURE_SAMPLE_RATE = 16000
@@ -91,6 +98,7 @@ export function useAudio() {
   const currentSound = useRef<Audio.Sound | null>(null)
   const generation = useRef(0)
   const fileCounter = useRef(0)
+  const interruptSent = useRef(false)  // 防止 speaking 期间重复发送 interrupt
 
   // 设置音频模式
   useEffect(() => {
@@ -102,8 +110,7 @@ export function useAudio() {
 
     // 监听服务端 reply_audio 消息
     const unsub = sessionManager.on('reply_audio', (msg) => {
-      const payload = msg.payload as ReplyAudioPayload & { generation?: number }
-      if (payload.generation !== undefined && payload.generation !== generation.current) return
+      const payload = msg.payload as ReplyAudioPayload
       if (payload.audio) {
         enqueueChunk(payload.audio)
       }
@@ -120,6 +127,11 @@ export function useAudio() {
 
   const startCapture = useCallback(async () => {
     if (isCapturing.current) return
+
+    if (!LiveAudioStream) {
+      console.warn('[useAudio] Native audio capture not available, skipping')
+      return
+    }
 
     const { status } = await Audio.requestPermissionsAsync()
     if (status !== 'granted') {
@@ -143,10 +155,11 @@ export function useAudio() {
         timestamp: Date.now(),
       })
 
-      // VAD: speaking 状态下检测用户说话 → 触发打断
-      if (sessionManager.getState() === 'speaking') {
+      // VAD: speaking 状态下检测用户说话 → 触发打断（仅发一次）
+      if (sessionManager.getState() === 'speaking' && !interruptSent.current) {
         const rms = calculateRMS(base64)
         if (rms > VAD_THRESHOLD) {
+          interruptSent.current = true
           console.log('[useAudio] VAD interrupt, RMS:', Math.round(rms))
           sessionManager.send({
             type: 'interrupt',
@@ -154,12 +167,23 @@ export function useAudio() {
             timestamp: Date.now(),
           })
         }
+      } else if (sessionManager.getState() !== 'speaking') {
+        interruptSent.current = false
       }
     })
 
     LiveAudioStream.start()
     isCapturing.current = true
     console.log('[useAudio] Capture started')
+
+    // 重新设置音频模式：react-native-live-audio-stream 启动时会覆盖 AVAudioSession，
+    // 可能没有设置 defaultToSpeaker，导致 TTS 音频从听筒出声。
+    // 在采集启动后重新调用 setAudioModeAsync 确保扬声器输出。
+    Audio.setAudioModeAsync({
+      allowsRecordingIOS: true,
+      playsInSilentModeIOS: true,
+      staysActiveInBackground: false,
+    })
   }, [])
 
   const stopCapture = useCallback(() => {
