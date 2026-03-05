@@ -43,6 +43,19 @@ function getWebViewHTML(modelUrl: string): string {
     let placeholderBody = null
     let placeholderHead = null
 
+    // ---------- Viseme 口型 ----------
+    const MOUTH_VISEMES = {
+      'aa': 'aa',
+      'ih': 'ih',
+      'ou': 'ou',
+      'ee': 'ee',
+      'oh': 'oh',
+      'sil': null,
+    }
+    let mouthCurrentWeight = 0
+    let mouthTargetWeight = 0
+    let mouthTargetViseme = 'aa'
+
     function init() {
       scene = new THREE.Scene()
       scene.background = new THREE.Color(0xf0f0f0)
@@ -103,17 +116,32 @@ function getWebViewHTML(modelUrl: string): string {
     }
 
     function handleMessage(msg) {
-      console.log('WebView received:', msg.type, msg)
       switch (msg.type) {
         case 'set_state':
           setState(msg.data)
           break
         case 'set_visemes':
-          // Phase 2 实现
+          handleVisemes(msg.data)
           break
         case 'set_expression':
-          // Phase 2 实现
           break
+      }
+    }
+
+    function handleVisemes(data) {
+      if (!data || !data.visemes || data.visemes.length === 0) return
+      // 取 chunk 中能量最大的帧作为目标
+      let maxWeight = 0
+      let bestViseme = 'sil'
+      for (const v of data.visemes) {
+        if (v.weight > maxWeight) {
+          maxWeight = v.weight
+          bestViseme = v.viseme
+        }
+      }
+      mouthTargetWeight = maxWeight
+      if (bestViseme !== 'sil') {
+        mouthTargetViseme = bestViseme
       }
     }
 
@@ -143,7 +171,6 @@ function getWebViewHTML(modelUrl: string): string {
           breathingEnabled = true
           startBlinking()
           resetExpression()
-          // 口型驱动在 Phase 2 实现
           break
       }
     }
@@ -297,6 +324,33 @@ function getWebViewHTML(modelUrl: string): string {
       sendToRN({ type: 'console', data: args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ') })
     }
 
+    // ---------- Mouth animation ----------
+    function updateMouth(delta) {
+      if (!currentVRM) return
+      const em = currentVRM.expressionManager
+
+      // Exponential lerp toward target weight
+      const speed = 12  // 快速响应
+      mouthCurrentWeight += (mouthTargetWeight - mouthCurrentWeight) * (1 - Math.exp(-speed * delta))
+
+      // 接近零时直接归零
+      if (mouthCurrentWeight < 0.01) mouthCurrentWeight = 0
+
+      // 应用 viseme：先清零所有嘴型，再设置当前目标
+      for (const key of Object.keys(MOUTH_VISEMES)) {
+        const exprName = MOUTH_VISEMES[key]
+        if (exprName) em.setValue(exprName, 0)
+      }
+      if (mouthCurrentWeight > 0 && MOUTH_VISEMES[mouthTargetViseme]) {
+        em.setValue(MOUTH_VISEMES[mouthTargetViseme], mouthCurrentWeight)
+      }
+
+      // speaking 结束后（非 speaking 状态），目标 weight 自然衰减到 0
+      if (currentState !== 'speaking') {
+        mouthTargetWeight = 0
+      }
+    }
+
     function animate() {
       requestAnimationFrame(animate)
       const delta = clock.getDelta()
@@ -312,6 +366,8 @@ function getWebViewHTML(modelUrl: string): string {
             spine.rotation.x = Math.sin(elapsed * 1.8) * 0.01
           }
         }
+
+        updateMouth(delta)
       }
 
       // 占位体呼吸（fallback）
@@ -368,6 +424,14 @@ function getWebViewHTML(modelUrl: string): string {
         currentVRM.expressionManager.setValue('angry', 0)
         currentVRM.expressionManager.setValue('sad', 0)
         currentVRM.expressionManager.setValue('surprised', 0)
+        // 口型归零
+        mouthTargetWeight = 0
+        mouthCurrentWeight = 0
+        for (const key of Object.keys(MOUTH_VISEMES)) {
+          if (MOUTH_VISEMES[key]) {
+            currentVRM.expressionManager.setValue(MOUTH_VISEMES[key], 0)
+          }
+        }
         // 重置头部旋转
         const head = currentVRM.humanoid.getNormalizedBoneNode('head')
         if (head) { head.rotation.z = 0; head.rotation.x = 0 }

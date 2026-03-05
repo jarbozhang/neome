@@ -1,8 +1,9 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, RefObject } from 'react'
 import { Audio } from 'expo-av'
 import { File, Paths } from 'expo-file-system/next'
 import { sessionManager } from '../services/SessionManager'
 import { ReplyAudioPayload } from '../../shared/types'
+import type { AvatarWebViewRef } from '../components/AvatarWebView'
 
 // 动态导入原生模块，Expo Go 中不可用时降级
 let LiveAudioStream: any = null
@@ -96,7 +97,7 @@ function uint8ToBase64(arr: Uint8Array): string {
 
 // ---------- Hook ----------
 
-export function useAudio() {
+export function useAudio(avatarRef?: RefObject<AvatarWebViewRef | null>) {
   const isCapturing = useRef(false)
   const playbackQueue = useRef<string[]>([])
   const isPlaying = useRef(false)
@@ -120,6 +121,13 @@ export function useAudio() {
       const payload = msg.payload as ReplyAudioPayload
       if (payload.audio) {
         enqueueChunk(payload.audio)
+      }
+      // 转发 viseme 数据到 WebView
+      if (payload.visemes && payload.visemes.length > 0 && avatarRef?.current) {
+        avatarRef.current.sendMessage({
+          type: 'set_visemes',
+          data: { visemes: payload.visemes },
+        })
       }
     })
 

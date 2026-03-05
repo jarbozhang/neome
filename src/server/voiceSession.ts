@@ -1,7 +1,7 @@
 import WebSocket from 'ws'
 import { randomUUID } from 'crypto'
 import { gunzipSync } from 'zlib'
-import { WSMessage, SessionState } from '../shared/types'
+import { WSMessage, SessionState, VisemeEvent } from '../shared/types'
 
 // ---------- 协议常量 ----------
 // Header byte 0: version=1 (高4位), headerSize=1 表示 4 bytes (低4位)
@@ -42,6 +42,72 @@ const DOUBAO_DIALOGUE_URL = 'wss://openspeech.bytedance.com/api/v3/realtime/dial
 
 // Pre-ready 音频缓冲上限
 const AUDIO_BUFFER_MAX = 100
+
+// ---------- Viseme 生成 ----------
+// 每帧 ~30ms (24kHz 16-bit mono → 720 samples = 1440 bytes)
+const VISEME_FRAME_BYTES = 1440
+// RMS 阈值：低于此值视为静默
+const VISEME_SILENCE_THRESHOLD = 800
+// 元音切换最小间隔 (ms)
+const VISEME_VOWEL_INTERVAL_MS = 180
+// 可用元音 viseme
+const VOWEL_VISEMES = ['aa', 'ih', 'ou', 'ee', 'oh']
+
+let lastVowelTime = 0
+let lastVowelIndex = 0
+
+/**
+ * 从 int16 PCM buffer 生成 viseme 事件序列
+ * 每 ~30ms 一帧，计算 RMS → 映射 mouth weight
+ * 超阈值时随机切换元音，静默帧发 sil
+ */
+function generateVisemes(int16Buf: Buffer): VisemeEvent[] {
+  const visemes: VisemeEvent[] = []
+  const totalBytes = int16Buf.length
+  let offset = 0
+  let frameTime = 0
+  const now = Date.now()
+
+  while (offset + 1 < totalBytes) {
+    const end = Math.min(offset + VISEME_FRAME_BYTES, totalBytes)
+    const sampleCount = Math.floor((end - offset) / 2)
+    if (sampleCount === 0) break
+
+    // 计算 RMS
+    let sumSq = 0
+    for (let i = 0; i < sampleCount; i++) {
+      const sample = int16Buf.readInt16LE(offset + i * 2)
+      sumSq += sample * sample
+    }
+    const rms = Math.sqrt(sumSq / sampleCount)
+
+    if (rms < VISEME_SILENCE_THRESHOLD) {
+      visemes.push({ viseme: 'sil', time: frameTime, weight: 0 })
+    } else {
+      // 归一化 weight: RMS 800~16000 → 0.1~1.0
+      const weight = Math.min(1.0, Math.max(0.1, (rms - VISEME_SILENCE_THRESHOLD) / 15200))
+
+      // 切换元音
+      if (now - lastVowelTime >= VISEME_VOWEL_INTERVAL_MS) {
+        let idx = Math.floor(Math.random() * VOWEL_VISEMES.length)
+        if (idx === lastVowelIndex) idx = (idx + 1) % VOWEL_VISEMES.length
+        lastVowelIndex = idx
+        lastVowelTime = now
+      }
+
+      visemes.push({
+        viseme: VOWEL_VISEMES[lastVowelIndex],
+        time: frameTime,
+        weight,
+      })
+    }
+
+    offset = end
+    frameTime += 30
+  }
+
+  return visemes
+}
 
 // ---------- VoiceSession 内部状态机 ----------
 type VoiceSessionState = 'init' | 'connecting' | 'ready' | 'closing' | 'closed'
@@ -644,11 +710,12 @@ export class VoiceSession {
     }
 
     const audioBase64 = int16Buf.toString('base64')
+    const visemes = generateVisemes(int16Buf)
     this.safeSendToClient({
       type: 'reply_audio',
       payload: {
         audio: audioBase64,
-        visemes: [],        // Task 2.3 中填充 viseme 数据
+        visemes,
         isFinal: false,
         generation: this.generation,
       },

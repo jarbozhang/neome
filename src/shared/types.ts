@@ -32,4 +32,5 @@ export interface ReplyAudioPayload {
   audio: string          // base64 编码的 PCM/opus chunk
   visemes: VisemeEvent[]
   isFinal: boolean       // 是否最后一个 chunk
+  generation?: number    // 打断代数，用于丢弃过期数据
 }

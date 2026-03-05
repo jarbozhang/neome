@@ -14,8 +14,8 @@ const MODEL_URL = `${SERVER_BASE}/vrm/default.vrm?raw=true`
 
 export default function MainScreen() {
   const { connected, state, transition } = useSession(SERVER_URL)
-  const { startCapture, stopCapture } = useAudio()
   const avatarRef = useRef<AvatarWebViewRef>(null)
+  const { startCapture, stopCapture } = useAudio(avatarRef)
 
   // 连接成功后自动开始音频采集
   useEffect(() => {
