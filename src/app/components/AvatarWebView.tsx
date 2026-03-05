@@ -51,17 +51,35 @@ function getWebViewHTML(modelUrl: string): string {
       camera.position.set(0, 1.3, 1.5)
       camera.lookAt(0, 1.2, 0)
 
-      renderer = new THREE.WebGLRenderer({ antialias: true, premultipliedAlpha: false })
+      renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        alpha: true,
+        premultipliedAlpha: false,
+      })
       renderer.setSize(window.innerWidth, window.innerHeight)
       renderer.setPixelRatio(window.devicePixelRatio)
       renderer.outputColorSpace = THREE.SRGBColorSpace
+      // MToon 有自己的色调映射，不使用引擎的
+      renderer.toneMapping = THREE.NoToneMapping
       document.body.appendChild(renderer.domElement)
 
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.6)
-      scene.add(ambientLight)
+      // MToon 对光照敏感，使用更丰富的光照设置
+      // 半球光：模拟天空+地面的环境反射
+      const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.6)
+      hemiLight.position.set(0, 2, 0)
+      scene.add(hemiLight)
+      // 主方向光
       const dirLight = new THREE.DirectionalLight(0xffffff, 0.8)
       dirLight.position.set(1, 2, 1)
       scene.add(dirLight)
+      // 补光（减少面部阴影）
+      const fillLight = new THREE.DirectionalLight(0xffffff, 0.3)
+      fillLight.position.set(-1, 1, 1)
+      scene.add(fillLight)
+      // 背光（轮廓感）
+      const backLight = new THREE.DirectionalLight(0xffffff, 0.2)
+      backLight.position.set(0, 1, -1)
+      scene.add(backLight)
 
       window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight
@@ -166,42 +184,52 @@ function getWebViewHTML(modelUrl: string): string {
         camera.far = 100
         camera.updateProjectionMatrix()
 
-        // MToon → MeshStandardMaterial (处理单材质和多材质数组)
-        // TODO Phase 4: 眼睛半透明叠层被 iOS WebGL premultiply 压暗，需自定义 shader 或服务端特殊处理
-        function replaceMat(oldMat) {
-          let color = new THREE.Color(0xffffff)
-          if (oldMat.color) color.copy(oldMat.color)
-          else if (oldMat.uniforms?.litFactor?.value) color.copy(oldMat.uniforms.litFactor.value)
-          let tex = oldMat.map || null
-          if (!tex && oldMat.uniforms) {
-            for (const key of ['map', 'mainTex', '_MainTex', 'diffuse']) {
-              if (oldMat.uniforms[key]?.value?.isTexture) { tex = oldMat.uniforms[key].value; break }
-            }
-          }
-          const mat = new THREE.MeshStandardMaterial({
-            color,
-            side: THREE.DoubleSide,
-            transparent: false,
-            opacity: 1.0,
-            roughness: 0.6,
-            metalness: 0.0,
-          })
-          if (tex) {
-            tex.premultiplyAlpha = false
-            tex.colorSpace = THREE.SRGBColorSpace
-            tex.needsUpdate = true
-            mat.map = tex
-          }
-          return mat
-        }
+        // 保留 MToon 材质原生渲染，仅做透明度/深度排序优化
+        let meshIndex = 0
+        const meshInfo = []
         vrmScene.traverse((child) => {
-          if (child.isMesh && child.material) {
-            child.frustumCulled = false
-            child.visible = true
-            const mats = Array.isArray(child.material) ? child.material : [child.material]
-            child.material = mats.length === 1 ? replaceMat(mats[0]) : mats.map(m => replaceMat(m))
-          }
+          if (!child.isMesh || !child.material) return
+          child.frustumCulled = false
+          child.visible = true
+
+          const mats = Array.isArray(child.material) ? child.material : [child.material]
+          mats.forEach((mat, i) => {
+            const info = {
+              name: child.name,
+              matType: mat.type || mat.constructor?.name || 'unknown',
+              transparent: mat.transparent,
+              alphaTest: mat.alphaTest,
+            }
+            meshInfo.push(JSON.stringify(info))
+
+            // 纹理色彩空间确保 sRGB
+            if (mat.map) {
+              mat.map.colorSpace = THREE.SRGBColorSpace
+              mat.map.needsUpdate = true
+            }
+
+            // 透明材质：正确设置深度写入和渲染顺序
+            if (mat.transparent) {
+              mat.depthWrite = false
+              mat.depthTest = true
+              child.renderOrder = 10 + meshIndex
+            } else {
+              mat.depthWrite = true
+              child.renderOrder = 0
+            }
+
+            // 使用 alphaTest 的材质（cutout 类型）：开启深度写入
+            if (mat.alphaTest > 0) {
+              mat.depthWrite = true
+              child.renderOrder = 5
+            }
+
+            mat.needsUpdate = true
+          })
+          meshIndex++
         })
+        // 输出材质调试信息
+        sendToRN({ type: 'meshDebug', data: meshInfo })
 
         // 移除占位体（如果有的话）
         removePlaceholder()
