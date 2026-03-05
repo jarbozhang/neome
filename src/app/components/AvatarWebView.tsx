@@ -61,21 +61,17 @@ function getWebViewHTML(modelUrl: string): string {
       renderer.outputColorSpace = THREE.SRGBColorSpace
       document.body.appendChild(renderer.domElement)
 
-      // MToon 光照：强侧光制造立体感
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.9)
-      scene.add(ambientLight)
-      // 主光（右上方，较强，制造明暗对比）
-      const keyLight = new THREE.DirectionalLight(0xffffff, 1.2)
-      keyLight.position.set(1, 2, 1.5)
+      // HemisphereLight: 天空暖白→地面冷灰渐变，让 MToon 也有自然明暗过渡
+      const hemiLight = new THREE.HemisphereLight(0xfff5ee, 0x8899aa, 0.9)
+      scene.add(hemiLight)
+      // 主光（正前偏右上方，适中强度）
+      const keyLight = new THREE.DirectionalLight(0xfff8f0, 1.1)
+      keyLight.position.set(0.5, 2, 2)
       scene.add(keyLight)
-      // 补光（左侧，较弱）
+      // 补光（左侧）
       const fillLight = new THREE.DirectionalLight(0xffffff, 0.4)
       fillLight.position.set(-1, 1, 1)
       scene.add(fillLight)
-      // 轮廓光（背后，制造边缘高光）
-      const rimLight = new THREE.DirectionalLight(0xffffff, 0.6)
-      rimLight.position.set(0, 1.5, -2)
-      scene.add(rimLight)
 
       window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight
@@ -180,7 +176,8 @@ function getWebViewHTML(modelUrl: string): string {
         camera.far = 100
         camera.updateProjectionMatrix()
 
-        // 混合策略：Face mesh 保留 MToon（眼部渲染正确），Body/Hair 用 PBR
+        // 混合策略：Face 保留 MToon（眼部正确）+ Body/Hair 用 PBR
+        // 通过亮化 PBR body + 提高 roughness 来匹配 MToon face 的亮度和质感
         function toPBR(oldMat) {
           let color = new THREE.Color(0xffffff)
           if (oldMat.color) color.copy(oldMat.color)
@@ -194,7 +191,7 @@ function getWebViewHTML(modelUrl: string): string {
           const mat = new THREE.MeshStandardMaterial({
             color,
             side: THREE.DoubleSide,
-            roughness: 0.45,
+            roughness: 0.65,
             metalness: 0.0,
             transparent: false,
             alphaTest: (oldMat.alphaTest || 0) > 0 ? (oldMat.alphaTest || 0.5) : 0,
@@ -213,11 +210,9 @@ function getWebViewHTML(modelUrl: string): string {
           child.frustumCulled = false
           child.visible = true
 
-          // Face mesh: 保留 MToon 材质（眼部 BLEND 叠层依赖 MToon 渲染管线）
-          // Body/Hair mesh: 替换为 MeshStandardMaterial（PBR 立体感）
           const isFace = /face/i.test(child.name)
           if (isFace) {
-            // MToon: 仅更新纹理色彩空间
+            // Face: 保留 MToon，仅修正纹理色彩空间
             const mats = Array.isArray(child.material) ? child.material : [child.material]
             mats.forEach((mat) => {
               if (mat.map) {
@@ -236,7 +231,7 @@ function getWebViewHTML(modelUrl: string): string {
               mat.needsUpdate = true
             })
           } else {
-            // Body/Hair: 替换为 PBR
+            // Body/Hair: 替换为亮化 PBR
             const mats = Array.isArray(child.material) ? child.material : [child.material]
             const newMats = mats.map(m => toPBR(m))
             child.material = newMats.length === 1 ? newMats[0] : newMats
@@ -442,6 +437,8 @@ const AvatarWebView = forwardRef<AvatarWebViewRef, AvatarWebViewProps>(
           onReady?.()
         } else if (msg.type === 'loading') {
           console.log('[AvatarWebView] Loading:', JSON.stringify(msg.data))
+        } else if (msg.type === 'debug') {
+          console.log('[AvatarWebView] DEBUG:', JSON.stringify(msg.data))
         } else if (msg.type === 'error') {
           console.error('[AvatarWebView] Error:', msg.data?.message)
           onError?.(msg.data?.message)
