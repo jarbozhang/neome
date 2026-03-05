@@ -61,16 +61,21 @@ function getWebViewHTML(modelUrl: string): string {
       renderer.outputColorSpace = THREE.SRGBColorSpace
       document.body.appendChild(renderer.domElement)
 
-      // 三点光照 + 环境光
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.7)
+      // MToon 光照：强侧光制造立体感
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.9)
       scene.add(ambientLight)
-      const dirLight = new THREE.DirectionalLight(0xffffff, 0.8)
-      dirLight.position.set(1, 2, 1)
-      scene.add(dirLight)
-      // 补光（减少面部阴影）
-      const fillLight = new THREE.DirectionalLight(0xffffff, 0.3)
+      // 主光（右上方，较强，制造明暗对比）
+      const keyLight = new THREE.DirectionalLight(0xffffff, 1.2)
+      keyLight.position.set(1, 2, 1.5)
+      scene.add(keyLight)
+      // 补光（左侧，较弱）
+      const fillLight = new THREE.DirectionalLight(0xffffff, 0.4)
       fillLight.position.set(-1, 1, 1)
       scene.add(fillLight)
+      // 轮廓光（背后，制造边缘高光）
+      const rimLight = new THREE.DirectionalLight(0xffffff, 0.6)
+      rimLight.position.set(0, 1.5, -2)
+      scene.add(rimLight)
 
       window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight
@@ -175,46 +180,25 @@ function getWebViewHTML(modelUrl: string): string {
         camera.far = 100
         camera.updateProjectionMatrix()
 
-        // MToon → MeshStandardMaterial，智能处理透明材质（眼睛等）
-        let meshIndex = 0
-        const meshInfo = []
-        function replaceMat(oldMat, meshName) {
-          const isTransparent = oldMat.transparent === true
-          const hasAlphaTest = (oldMat.alphaTest || 0) > 0
-          // 眼睛相关 mesh 通常名称包含 eye/iris/pupil/highlight
-          const isEyePart = /eye|iris|pupil|highlight|face_eye/i.test(meshName)
-
+        // 混合策略：Face mesh 保留 MToon（眼部渲染正确），Body/Hair 用 PBR
+        function toPBR(oldMat) {
           let color = new THREE.Color(0xffffff)
           if (oldMat.color) color.copy(oldMat.color)
           else if (oldMat.uniforms?.litFactor?.value) color.copy(oldMat.uniforms.litFactor.value)
-
           let tex = oldMat.map || null
           if (!tex && oldMat.uniforms) {
             for (const key of ['map', 'mainTex', '_MainTex', 'diffuse']) {
               if (oldMat.uniforms[key]?.value?.isTexture) { tex = oldMat.uniforms[key].value; break }
             }
           }
-
-          const matOpts = {
+          const mat = new THREE.MeshStandardMaterial({
             color,
             side: THREE.DoubleSide,
-            roughness: 0.6,
+            roughness: 0.45,
             metalness: 0.0,
-          }
-
-          // 透明材质或眼睛部分：使用 alphaTest cutout 而非 alpha blending
-          // 避免 iOS WebGL premultiply 导致的黑色问题
-          if (isTransparent || hasAlphaTest || isEyePart) {
-            matOpts.transparent = true
-            matOpts.opacity = 1.0
-            matOpts.alphaTest = 0.01
-            matOpts.depthWrite = true
-          } else {
-            matOpts.transparent = false
-            matOpts.opacity = 1.0
-          }
-
-          const mat = new THREE.MeshStandardMaterial(matOpts)
+            transparent: false,
+            alphaTest: (oldMat.alphaTest || 0) > 0 ? (oldMat.alphaTest || 0.5) : 0,
+          })
           if (tex) {
             tex.premultiplyAlpha = false
             tex.colorSpace = THREE.SRGBColorSpace
@@ -229,27 +213,35 @@ function getWebViewHTML(modelUrl: string): string {
           child.frustumCulled = false
           child.visible = true
 
-          const mats = Array.isArray(child.material) ? child.material : [child.material]
-          const newMats = mats.map((m, i) => {
-            const info = {
-              name: child.name,
-              matType: m.type || m.constructor?.name || 'unknown',
-              transparent: m.transparent,
-              alphaTest: m.alphaTest,
-              hasMap: !!m.map,
-            }
-            meshInfo.push(JSON.stringify(info))
-            return replaceMat(m, child.name)
-          })
-          child.material = newMats.length === 1 ? newMats[0] : newMats
-
-          // 透明/半透明 mesh 后渲染
-          const anyTransparent = newMats.some(m => m.transparent)
-          child.renderOrder = anyTransparent ? 10 + meshIndex : 0
-          meshIndex++
+          // Face mesh: 保留 MToon 材质（眼部 BLEND 叠层依赖 MToon 渲染管线）
+          // Body/Hair mesh: 替换为 MeshStandardMaterial（PBR 立体感）
+          const isFace = /face/i.test(child.name)
+          if (isFace) {
+            // MToon: 仅更新纹理色彩空间
+            const mats = Array.isArray(child.material) ? child.material : [child.material]
+            mats.forEach((mat) => {
+              if (mat.map) {
+                mat.map.colorSpace = THREE.SRGBColorSpace
+                mat.map.needsUpdate = true
+              }
+              if (mat.uniforms) {
+                for (const key of Object.keys(mat.uniforms)) {
+                  const val = mat.uniforms[key]?.value
+                  if (val && val.isTexture) {
+                    val.colorSpace = THREE.SRGBColorSpace
+                    val.needsUpdate = true
+                  }
+                }
+              }
+              mat.needsUpdate = true
+            })
+          } else {
+            // Body/Hair: 替换为 PBR
+            const mats = Array.isArray(child.material) ? child.material : [child.material]
+            const newMats = mats.map(m => toPBR(m))
+            child.material = newMats.length === 1 ? newMats[0] : newMats
+          }
         })
-        // 输出材质调试信息
-        sendToRN({ type: 'meshDebug', data: meshInfo })
 
         // 移除占位体（如果有的话）
         removePlaceholder()
