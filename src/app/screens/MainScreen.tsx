@@ -13,9 +13,9 @@ const SERVER_URL = `ws://${SERVER_HOST}:${SERVER_PORT}/ws`
 const MODEL_URL = `${SERVER_BASE}/vrm/default.vrm?raw=true`
 
 export default function MainScreen() {
-  const { connected, state, transition } = useSession(SERVER_URL)
+  const { connected, state, transition, resetSession } = useSession(SERVER_URL)
   const avatarRef = useRef<AvatarWebViewRef>(null)
-  const { startCapture, stopCapture } = useAudio(avatarRef)
+  const { startCapture, stopCapture, clearPlayback } = useAudio(avatarRef)
 
   // 连接成功后自动开始音频采集
   useEffect(() => {
@@ -48,6 +48,10 @@ export default function MainScreen() {
   return (
     <View style={styles.container}>
       <AvatarWebView ref={avatarRef} modelUrl={MODEL_URL} serverBaseUrl={SERVER_BASE} onReady={handleReady} onError={handleError} />
+      {/* 新顾客按钮 */}
+      <TouchableOpacity style={styles.resetButton} onPress={() => { clearPlayback(); resetSession() }}>
+        <Text style={styles.resetButtonText}>新顾客</Text>
+      </TouchableOpacity>
       {/* Debug 信息 */}
       <View style={styles.debugBar}>
         <Text style={styles.debugText}>
@@ -116,5 +120,19 @@ const styles = StyleSheet.create({
   },
   stateButtonTextActive: {
     color: '#fff',
+  },
+  resetButton: {
+    position: 'absolute',
+    top: 60,
+    right: 16,
+    backgroundColor: '#E74C3C',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+  },
+  resetButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '700',
   },
 })

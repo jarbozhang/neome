@@ -32,6 +32,7 @@ const EVENT_FINISH_CONNECTION = 2
 const EVENT_START_SESSION     = 100
 const EVENT_FINISH_SESSION    = 102
 const EVENT_USER_QUERY        = 200   // 音频帧使用此事件
+const EVENT_SAY_HELLO         = 300   // 主动触发欢迎语
 
 // 事件编号：Server → Client（不需要 SessionID/ConnectID 前缀的特殊事件）
 // 注意：event 50 (ConnectionStarted) 实际包含 connectId 字段，所以不在此集合中
@@ -256,9 +257,24 @@ function decodeFrame(data: Buffer): DecodedFrame | null {
   return { msgType, flags, serialization, compression, eventNum, sessionId, payload }
 }
 
+// ---------- system_role ----------
+const SYSTEM_ROLE = `你是"小Neo"，一家咖啡店的点单助手。友好、简洁地与顾客交流。
+
+## 重要规则
+- 每次回复不超过 2-3 句话（语音交互，太长用户听着累）
+- 主动引导点单流程
+
+## 出杯触发
+当顾客明确确认要一杯美式咖啡时（例如"好的就要美式"、"确认下单"、"就这个"），
+你的回复末尾必须包含标记 [MAKE:美式]。
+仅在顾客确认下单时才包含此标记，询问、推荐阶段不要包含。
+示例：
+- 顾客说"来一杯美式" → "好的，一杯美式咖啡！马上为您制作～[MAKE:美式]"
+- 顾客说"有什么好喝的" → 正常推荐，不含标记`
+
 // ---------- StartSession payload ----------
-function buildStartSessionPayload(): Record<string, unknown> {
-  return {
+function buildStartSessionPayload(dialogId?: string | null): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
     asr: {
       extra: {
         end_smooth_window_ms: 1500,
@@ -270,21 +286,23 @@ function buildStartSessionPayload(): Record<string, unknown> {
       speaker: 'zh_female_vv_jupiter_bigtts',
       audio_config: {
         channel: 1,
-        format: 'pcm',
+        format: 'pcm_s16le',
         sample_rate: 24000,
       },
     },
     dialog: {
-      bot_name: '小美',
-      system_role: '你是一个咖啡店的点单助手，友好、简洁地与顾客交流。',
+      bot_name: '小Neo',
+      system_role: SYSTEM_ROLE,
       speaking_style: '语气友好、专业',
       extra: {
         input_mod: 'audio',
         model: '1.2.1.0',
         recv_timeout: 10,
       },
+      ...(dialogId ? { dialog_id: dialogId } : {}),
     },
   }
+  return payload
 }
 
 // ---------- VoiceSession ----------
@@ -299,10 +317,17 @@ export class VoiceSession {
   private audioBuffer: Buffer[] = []               // pre-ready PCM 缓冲
   private closed: boolean = false
   private isSpeaking: boolean = false
+  private dialogId: string | null = null           // 跨 Session 对话上下文 ID
+  private isFirstSession: boolean = true           // 控制欢迎语只在首次/重置后触发
+  private currentResponseBuffer: string = ''       // 累积 LLM 回复文本（用于意图检测）
+  private responseBufferGeneration: number = 0     // buffer 对应的 generation
+  private pendingReset: boolean = false             // connecting 期间收到 reset 请求
+  private onMakeCoffee?: (recipe: string) => void
 
-  constructor(clientWs: WebSocket) {
+  constructor(clientWs: WebSocket, onMakeCoffee?: (recipe: string) => void) {
     this.clientWs = clientWs
     this.connectId = randomUUID()
+    this.onMakeCoffee = onMakeCoffee
   }
 
   async start(): Promise<void> {
@@ -405,11 +430,12 @@ export class VoiceSession {
 
     this.generation++
     this.isSpeaking = false
+    this.currentResponseBuffer = ''
     console.log('[VoiceSession] Interrupt, generation:', this.generation)
 
     if (this.internalState !== 'ready' || !this.sessionId) return
 
-    // FinishSession → StartSession（重置当前对话轮次）
+    // FinishSession → StartSession（重置当前对话轮次，保留 dialogId 上下文）
     const finishFrame = encodeJsonFrame(
       MSG_TYPE_FULL_CLIENT,
       EVENT_FINISH_SESSION,
@@ -420,6 +446,37 @@ export class VoiceSession {
     this.doubaoWs?.send(finishFrame)
 
     // 重新建立 Session，复用同一 WebSocket 连接
+    this.internalState = 'connecting'
+    this.sessionId = null
+    this.sendStartSession()
+  }
+
+  /** 重置会话（新顾客）：清除 dialogId，重新触发欢迎语 */
+  resetSession(): void {
+    if (this.closed) return
+
+    console.log('[VoiceSession] Reset session (new customer)')
+    this.dialogId = null
+    this.isFirstSession = true
+    this.currentResponseBuffer = ''
+    this.generation++
+    this.isSpeaking = false
+
+    if (this.internalState !== 'ready' || !this.sessionId) {
+      // 正在 connecting 或无 sessionId → 标记待处理，在 SessionStarted 后执行
+      this.pendingReset = true
+      return
+    }
+
+    const finishFrame = encodeJsonFrame(
+      MSG_TYPE_FULL_CLIENT,
+      EVENT_FINISH_SESSION,
+      {},
+      this.sessionId,
+      true,
+    )
+    this.doubaoWs?.send(finishFrame)
+
     this.internalState = 'connecting'
     this.sessionId = null
     this.sendStartSession()
@@ -483,12 +540,27 @@ export class VoiceSession {
     const frame = encodeJsonFrame(
       MSG_TYPE_FULL_CLIENT,
       EVENT_START_SESSION,
-      buildStartSessionPayload(),
+      buildStartSessionPayload(this.dialogId),
       this.connectId,
       true,  // includeSessionId: StartSession 需要包含 connectId
     )
     this.doubaoWs?.send(frame)
-    console.log('[VoiceSession] StartSession sent with connectId:', this.connectId)
+    console.log('[VoiceSession] StartSession sent, connectId:', this.connectId, 'dialogId:', this.dialogId)
+  }
+
+  /** 发送 SayHello 主动触发欢迎语，返回是否发送成功 */
+  private sendSayHello(): boolean {
+    if (!this.sessionId || this.doubaoWs?.readyState !== WebSocket.OPEN) return false
+    const frame = encodeJsonFrame(
+      MSG_TYPE_FULL_CLIENT,
+      EVENT_SAY_HELLO,
+      { content: '你好！欢迎光临，我是小Neo，有什么可以帮你的吗？' },
+      this.sessionId,
+      true,
+    )
+    this.doubaoWs.send(frame)
+    console.log('[VoiceSession] SayHello sent')
+    return true
   }
 
   /** 发送音频帧给豆包（event=200） */
@@ -519,11 +591,15 @@ export class VoiceSession {
 
     const { msgType, eventNum, sessionId: frameSid, payload, serialization, compression } = frame
 
-    // ConnectionStarted (50) 的 sid 字段是 connectId，不是 sessionId
-    // SessionStarted (150) 及之后事件的 sid 才是真正的 sessionId
-    if (frameSid && eventNum !== 50 && !this.sessionId) {
-      this.sessionId = frameSid
-      console.log('[VoiceSession] sessionId set:', this.sessionId)
+    // sessionId 仅在 event 150 (SessionStarted) 中设置，
+    // 避免 interrupt/reset 后旧帧的 sid 覆盖已清空的 sessionId
+
+    // 丢弃旧 session 的帧：
+    // 排除连接级事件 (50/51/52) 和新 session 建立 (150)
+    const isConnectionEvent = eventNum !== null && eventNum <= 52
+    if (frameSid && eventNum !== 150 && !isConnectionEvent) {
+      if (this.sessionId && frameSid !== this.sessionId) return
+      if (!this.sessionId && this.internalState === 'connecting') return
     }
 
     // 解压 payload（如果使用了 gzip）
@@ -549,7 +625,7 @@ export class VoiceSession {
           return
         }
       }
-      this.handleServerJsonEvent(eventNum, json)
+      this.handleServerJsonEvent(eventNum, json, frameSid)
     } else if (msgType === MSG_TYPE_AUDIO_ONLY_SERVER) {
       // TTS 音频 PCM（也可能被 gzip 压缩）
       this.handleServerAudio(realPayload)
@@ -564,7 +640,7 @@ export class VoiceSession {
   }
 
   /** 处理豆包 JSON 事件 */
-  private handleServerJsonEvent(eventNum: number | null, json: Record<string, unknown>): void {
+  private handleServerJsonEvent(eventNum: number | null, json: Record<string, unknown>, frameSid?: string | null): void {
     console.log('[VoiceSession] Server event:', eventNum, JSON.stringify(json).slice(0, 200))
 
     switch (eventNum) {
@@ -594,15 +670,31 @@ export class VoiceSession {
         // SessionStarted → ready，可以开始接收音频
         console.log('[VoiceSession] SessionStarted, session ready')
         this.internalState = 'ready'
-        // sessionId 可能在这条消息里
-        if (!this.sessionId) {
-          const sid = json['session_id'] as string | undefined
-          if (sid) {
-            this.sessionId = sid
-            console.log('[VoiceSession] sessionId from SessionStarted:', this.sessionId)
-          }
+        // sessionId: 优先帧头 sid，降级 json payload
+        const sid = frameSid || (json['session_id'] as string | undefined)
+        if (sid) {
+          this.sessionId = sid
+          console.log('[VoiceSession] sessionId from SessionStarted:', this.sessionId)
+        }
+        // 捕获 dialog_id（跨 Session 上下文）
+        const dialogId = json['dialog_id'] as string | undefined
+        if (dialogId) {
+          this.dialogId = dialogId
+          console.log('[VoiceSession] dialogId captured:', this.dialogId)
+        }
+        // 如果有挂起的 reset 请求（在 connecting 期间收到），立即执行
+        if (this.pendingReset) {
+          this.pendingReset = false
+          console.log('[VoiceSession] Executing pending reset')
+          this.resetSession()
+          break
         }
         this.flushAudioBuffer()
+        // 首次 Session 或重置后 → 触发欢迎语
+        if (this.isFirstSession) {
+          const sent = this.sendSayHello()
+          if (sent) this.isFirstSession = false
+        }
         // 通知客户端进入 listening 状态
         this.safeSendToClient({
           type: 'state_change',
@@ -623,14 +715,30 @@ export class VoiceSession {
   private handleBusinessEvent(eventNum: number | null, json: Record<string, unknown>): void {
     const extra = json['extra'] as Record<string, unknown> | undefined
 
-    // Event 451: ASR 识别文本（豆包对话 API 格式：extra.origin_text + extra.endpoint）
-    if (eventNum === 451 && extra) {
-      const text = extra['origin_text'] as string | undefined
-      const isEndpoint = extra['endpoint'] as boolean | undefined
+    // Event 450: ASRInfo — 日志记录 question_id
+    if (eventNum === 450) {
+      const questionId = json['question_id'] ?? extra?.['question_id']
+      console.log('[VoiceSession] ASRInfo (450), question_id:', questionId)
+    }
+
+    // Event 451: ASR 识别文本（兼容官方格式 + 现有格式）
+    if (eventNum === 451) {
+      let text: string | undefined
+      let isFinal = false
+
+      // 优先官方格式: results[0].text + is_interim
+      const results = json['results'] as Array<{ text: string; is_interim: boolean }> | undefined
+      if (results?.length) {
+        text = results[0].text
+        isFinal = !results[0].is_interim
+      } else if (extra) {
+        // 降级现有格式: extra.origin_text + extra.endpoint
+        text = extra['origin_text'] as string | undefined
+        isFinal = !!(extra['endpoint'] as boolean | undefined)
+      }
 
       if (text) {
-        if (isEndpoint) {
-          // 用户说话结束 → thinking 状态
+        if (isFinal) {
           this.safeSendToClient({
             type: 'state_change',
             payload: { state: 'thinking' as SessionState },
@@ -641,7 +749,7 @@ export class VoiceSession {
           type: 'transcript',
           payload: {
             text,
-            isFinal: !!isEndpoint,
+            isFinal,
             generation: this.generation,
           },
           timestamp: Date.now(),
@@ -649,10 +757,28 @@ export class VoiceSession {
       }
     }
 
+    // Event 459: ASREnded — 兜底日志
+    if (eventNum === 459) {
+      console.log('[VoiceSession] ASREnded (459)')
+    }
+
+    // Event 350: TTSSentenceStart — 日志记录回复文本（备用通道）
+    if (eventNum === 350) {
+      const text = json['text'] as string | undefined
+      if (text) {
+        console.log('[VoiceSession] TTSSentenceStart (350):', text.slice(0, 100))
+      }
+    }
+
     // Event 550: LLM 文本回复
     if (eventNum === 550) {
       const content = json['content'] as string | undefined
       if (content) {
+        // 绑定 generation：新回复开始时记录 generation
+        if (this.currentResponseBuffer === '') {
+          this.responseBufferGeneration = this.generation
+        }
+        this.currentResponseBuffer += content
         this.safeSendToClient({
           type: 'transcript',
           payload: {
@@ -665,8 +791,24 @@ export class VoiceSession {
       }
     }
 
-    // Event 559: LLM 文本回复结束
+    // Event 559: LLM 文本回复结束 — 意图检测
     if (eventNum === 559) {
+      // 仅当 buffer 属于当前 generation 时才触发意图检测
+      if (this.responseBufferGeneration === this.generation) {
+        const makeMatch = this.currentResponseBuffer.match(/\[MAKE:([^\]]+)\]/)
+        if (makeMatch) {
+          const recipe = makeMatch[1]
+          console.log('[VoiceSession] Coffee order detected:', recipe)
+          this.onMakeCoffee?.(recipe)
+          this.safeSendToClient({
+            type: 'make_coffee',
+            payload: { recipe },
+            timestamp: Date.now(),
+          })
+        }
+      }
+      this.currentResponseBuffer = ''
+
       this.safeSendToClient({
         type: 'transcript',
         payload: {
@@ -689,7 +831,7 @@ export class VoiceSession {
     }
   }
 
-  /** 处理豆包发来的 TTS 音频帧（float32 PCM → int16 PCM） */
+  /** 处理豆包发来的 TTS 音频帧（pcm_s16le 直出，无需转换） */
   private handleServerAudio(pcmBuf: Buffer): void {
     if (!this.isSpeaking) {
       this.isSpeaking = true
@@ -700,17 +842,8 @@ export class VoiceSession {
       })
     }
 
-    // 豆包对话 API 返回 float32 PCM，转换为 int16 PCM
-    const floatCount = pcmBuf.length / 4
-    const int16Buf = Buffer.alloc(floatCount * 2)
-    for (let i = 0; i < floatCount; i++) {
-      let sample = pcmBuf.readFloatLE(i * 4)
-      sample = Math.max(-1.0, Math.min(1.0, sample))
-      int16Buf.writeInt16LE(Math.round(sample * 32767), i * 2)
-    }
-
-    const audioBase64 = int16Buf.toString('base64')
-    const visemes = generateVisemes(int16Buf)
+    const audioBase64 = pcmBuf.toString('base64')
+    const visemes = generateVisemes(pcmBuf)
     this.safeSendToClient({
       type: 'reply_audio',
       payload: {

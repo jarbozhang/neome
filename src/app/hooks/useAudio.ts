@@ -4,6 +4,7 @@ import { File, Paths } from 'expo-file-system/next'
 import { sessionManager } from '../services/SessionManager'
 import { ReplyAudioPayload } from '../../shared/types'
 import type { AvatarWebViewRef } from '../components/AvatarWebView'
+import { setDefaultToSpeaker } from '../../../modules/audio-route'
 
 // 动态导入原生模块，Expo Go 中不可用时降级
 let LiveAudioStream: any = null
@@ -30,6 +31,9 @@ const VAD_GRACE_PERIOD_MS = 2000
 
 // 收到多少个 TTS chunk 后开始播放（减小首帧延迟 vs 防止断续）
 const PLAYBACK_START_CHUNKS = 3
+
+// speaking 结束后回声冷却期（ms），防止扬声器回声被 ASR 识别成用户输入
+const ECHO_COOLDOWN_MS = 1500
 
 // ---------- 工具函数 ----------
 
@@ -107,6 +111,8 @@ export function useAudio(avatarRef?: RefObject<AvatarWebViewRef | null>) {
   const interruptSent = useRef(false)  // 防止 speaking 期间重复发送 interrupt
   const speakingStartTime = useRef(0)  // 进入 speaking 状态的时间戳
   const wasSpeaking = useRef(false)    // 追踪上一次是否处于 speaking
+  const speakingEndTime = useRef(0)    // 离开 speaking 状态的时间戳（回声冷却用）
+  const expectedServerGen = useRef<number | null>(null)  // 服务端 generation 校验
 
   // 设置音频模式
   useEffect(() => {
@@ -119,6 +125,14 @@ export function useAudio(avatarRef?: RefObject<AvatarWebViewRef | null>) {
     // 监听服务端 reply_audio 消息
     const unsubAudio = sessionManager.on('reply_audio', (msg) => {
       const payload = msg.payload as ReplyAudioPayload
+      // 服务端 generation 校验：首包记录，后续不匹配则丢弃
+      if (payload.generation !== undefined) {
+        if (expectedServerGen.current === null) {
+          expectedServerGen.current = payload.generation
+        } else if (payload.generation !== expectedServerGen.current) {
+          return  // 旧 generation 的音频，丢弃
+        }
+      }
       if (payload.audio) {
         enqueueChunk(payload.audio)
       }
@@ -193,9 +207,27 @@ export function useAudio(avatarRef?: RefObject<AvatarWebViewRef | null>) {
           }
         }
       } else {
-        // 非 speaking 状态：正常发送音频到后端
-        wasSpeaking.current = false
-        interruptSent.current = false
+        // 非 speaking 状态
+        if (wasSpeaking.current) {
+          wasSpeaking.current = false
+          interruptSent.current = false
+        }
+
+        // TTS 还在播放时，不发送音频（防止回声被 ASR 识别）
+        if (isPlaying.current) {
+          speakingEndTime.current = Date.now()  // 持续刷新，冷却期从播放真正结束后开始
+          return
+        }
+
+        // 播放结束后的回声冷却期
+        if (speakingEndTime.current > 0) {
+          const cooldown = Date.now() - speakingEndTime.current
+          if (cooldown < ECHO_COOLDOWN_MS) {
+            return  // 跳过这个 chunk
+          }
+        }
+
+        // 正常发送音频到后端
         sessionManager.send({
           type: 'audio_chunk',
           payload: { audio: base64 },
@@ -208,14 +240,14 @@ export function useAudio(avatarRef?: RefObject<AvatarWebViewRef | null>) {
     isCapturing.current = true
     console.log('[useAudio] Capture started')
 
-    // 重新设置音频模式：react-native-live-audio-stream 启动时会覆盖 AVAudioSession，
-    // 可能没有设置 defaultToSpeaker，导致 TTS 音频从听筒出声。
-    // 在采集启动后重新调用 setAudioModeAsync 确保扬声器输出。
-    Audio.setAudioModeAsync({
-      allowsRecordingIOS: true,
-      playsInSilentModeIOS: true,
-      staysActiveInBackground: false,
-    })
+    // LiveAudioStream 启动后会覆盖 AVAudioSession，默认走听筒。
+    // 调用原生模块强制切换到扬声器输出。
+    try {
+      setDefaultToSpeaker()
+      console.log('[useAudio] Audio routed to speaker')
+    } catch (e) {
+      console.warn('[useAudio] Failed to set speaker output:', e)
+    }
   }, [])
 
   const stopCapture = useCallback(() => {
@@ -261,6 +293,9 @@ export function useAudio(avatarRef?: RefObject<AvatarWebViewRef | null>) {
         return
       }
 
+      // 播放前重新 assert 扬声器路由（expo-av 可能覆盖 AVAudioSession）
+      try { setDefaultToSpeaker() } catch (_) {}
+
       const { sound } = await Audio.Sound.createAsync({ uri: file.uri })
       currentSound.current = sound
 
@@ -284,9 +319,10 @@ export function useAudio(avatarRef?: RefObject<AvatarWebViewRef | null>) {
     }
   }
 
-  /** 清空播放队列并停止当前播放（打断时调用） */
+  /** 清空播放队列并停止当前播放（打断/重置时调用） */
   const clearPlayback = useCallback(async () => {
     generation.current++
+    expectedServerGen.current = null  // 重置服务端 generation 校验
     playbackQueue.current = []
     isPlaying.current = false
 

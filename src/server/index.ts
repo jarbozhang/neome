@@ -3,6 +3,7 @@ import path from 'path'
 
 dotenv.config({ path: path.resolve(__dirname, '../../.env') })
 import fs from 'fs'
+import { randomUUID } from 'crypto'
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
 import fastifyStatic from '@fastify/static'
@@ -185,11 +186,41 @@ const start = async () => {
       }
     })
 
+    // ---------- MQTT 出杯 ----------
+    async function makeCoffee(recipe: string): Promise<void> {
+      const url = 'http://mqtt-t.bfelab.com/api/v5/publish'
+
+      const body = {
+        payload_encoding: 'plain',
+        topic: 'demo/cmd/make',
+        qos: 1,
+        payload: JSON.stringify({
+          order_id: randomUUID(),
+          index_id: '1',
+          msg_id: randomUUID(),
+          recipe_key: recipe,
+          sku_name: `${recipe}(量贩)`,
+        }),
+      }
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Basic OTQzOTA5MzRmODAwNDIwZDo2RHh0dURiVTNuUDZxR2Vzdlp6VUlPS2NGS2FBMXg0ZlNIVGNVYkhSQ3RC',
+        },
+        body: JSON.stringify(body),
+      })
+      console.log('[MQTT] makeCoffee response:', res.status)
+    }
+
     // WebSocket 路由（必须在 register(websocket) 之后注册）
     app.get('/ws', { websocket: true }, (socket, req) => {
       app.log.info('Client connected')
 
-      const voiceSession = new VoiceSession(socket)
+      const voiceSession = new VoiceSession(socket, (recipe) => {
+        makeCoffee(recipe).catch(err => app.log.error(err, 'MQTT failed'))
+      })
       voiceSession.start().catch(err => {
         app.log.error(err, 'VoiceSession start failed')
       })
@@ -208,8 +239,11 @@ const start = async () => {
               voiceSession.interrupt()
               break
             }
+            case 'session_reset': {
+              voiceSession.resetSession()
+              break
+            }
             case 'state_change': {
-              // Phase 2: 客户端 state_change 仅做日志，服务端权威驱动
               const state = (msg.payload as { state: string } | null)?.state
               app.log.info({ state }, 'Client state_change (logged only)')
               break

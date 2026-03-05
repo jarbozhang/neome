@@ -10,6 +10,8 @@ export type WSMessageType =
   | 'state_change'     // 双向：状态机变更
   | 'face_position'    // 客户端→服务端→WebView：用户脸部位置
   | 'welcome'          // 服务端→客户端：欢迎语触发
+  | 'session_reset'    // 客户端→服务端：新顾客重置会话
+  | 'make_coffee'      // 服务端→客户端：出杯指令
 
 export interface WSMessage {
   type: WSMessageType

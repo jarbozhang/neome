@@ -7,6 +7,7 @@ interface UseSessionReturn {
   state: SessionState
   send: (msg: WSMessage) => void
   transition: (newState: SessionState) => boolean
+  resetSession: () => void
 }
 
 export function useSession(serverUrl: string): UseSessionReturn {
@@ -31,5 +32,9 @@ export function useSession(serverUrl: string): UseSessionReturn {
     return sessionManager.transition(newState)
   }, [])
 
-  return { connected, state, send, transition }
+  const resetSession = useCallback(() => {
+    sessionManager.resetSession()
+  }, [])
+
+  return { connected, state, send, transition, resetSession }
 }

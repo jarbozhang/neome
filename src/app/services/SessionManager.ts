@@ -141,6 +141,15 @@ export class SessionManager {
     return true
   }
 
+  resetSession(): void {
+    console.log('[SessionManager] Reset session (new customer)')
+    this.send({
+      type: 'session_reset',
+      payload: {},
+      timestamp: Date.now(),
+    })
+  }
+
   forceIdle(): void {
     this.state = 'idle'
     this.onStateChange?.('idle')
