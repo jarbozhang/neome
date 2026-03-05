@@ -14,7 +14,7 @@ const MODEL_URL = `${SERVER_BASE}/vrm/default.vrm?raw=true`
 
 export default function MainScreen() {
   const { connected, state, transition } = useSession(SERVER_URL)
-  const { startCapture, stopCapture, clearPlayback } = useAudio()
+  const { startCapture, stopCapture } = useAudio()
   const avatarRef = useRef<AvatarWebViewRef>(null)
 
   // 连接成功后自动开始音频采集
@@ -26,17 +26,10 @@ export default function MainScreen() {
     }
   }, [connected, startCapture, stopCapture])
 
-  // 状态变更时通知 WebView + 处理打断
-  const prevStateRef = useRef<SessionState>('idle')
+  // 状态变更时通知 WebView
   useEffect(() => {
     avatarRef.current?.sendMessage({ type: 'set_state', data: state })
-
-    // 仅在从 speaking 离开时清空播放队列（用户打断）
-    if (prevStateRef.current === 'speaking' && state === 'listening') {
-      clearPlayback()
-    }
-    prevStateRef.current = state
-  }, [state, clearPlayback])
+  }, [state])
 
   const handleReady = useCallback(() => {
     console.log('[MainScreen] Avatar WebView ready')

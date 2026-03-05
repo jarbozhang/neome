@@ -20,7 +20,12 @@ const CAPTURE_BITS = 16
 const TTS_SAMPLE_RATE = 24000
 
 // VAD: 16-bit PCM RMS 阈值（speaking 状态下检测用户说话打断）
-const VAD_THRESHOLD = 800
+// 阈值不能太低，否则扬声器播放的 TTS 音频泄漏到麦克风会误触发打断
+const VAD_THRESHOLD = 2000
+
+// 进入 speaking 状态后，延迟多久开启 VAD（ms）
+// 等待音频播放稳定 + 回声消除生效
+const VAD_GRACE_PERIOD_MS = 2000
 
 // 收到多少个 TTS chunk 后开始播放（减小首帧延迟 vs 防止断续）
 const PLAYBACK_START_CHUNKS = 3
@@ -99,6 +104,8 @@ export function useAudio() {
   const generation = useRef(0)
   const fileCounter = useRef(0)
   const interruptSent = useRef(false)  // 防止 speaking 期间重复发送 interrupt
+  const speakingStartTime = useRef(0)  // 进入 speaking 状态的时间戳
+  const wasSpeaking = useRef(false)    // 追踪上一次是否处于 speaking
 
   // 设置音频模式
   useEffect(() => {
@@ -109,7 +116,7 @@ export function useAudio() {
     })
 
     // 监听服务端 reply_audio 消息
-    const unsub = sessionManager.on('reply_audio', (msg) => {
+    const unsubAudio = sessionManager.on('reply_audio', (msg) => {
       const payload = msg.payload as ReplyAudioPayload
       if (payload.audio) {
         enqueueChunk(payload.audio)
@@ -117,7 +124,7 @@ export function useAudio() {
     })
 
     return () => {
-      unsub()
+      unsubAudio()
       stopCapture()
       clearPlayback()
     }
@@ -148,27 +155,44 @@ export function useAudio() {
     })
 
     LiveAudioStream.on('data', (base64: string) => {
-      // 发送到后端
-      sessionManager.send({
-        type: 'audio_chunk',
-        payload: { audio: base64 },
-        timestamp: Date.now(),
-      })
+      const currentState = sessionManager.getState()
 
-      // VAD: speaking 状态下检测用户说话 → 触发打断（仅发一次）
-      if (sessionManager.getState() === 'speaking' && !interruptSent.current) {
-        const rms = calculateRMS(base64)
-        if (rms > VAD_THRESHOLD) {
-          interruptSent.current = true
-          console.log('[useAudio] VAD interrupt, RMS:', Math.round(rms))
-          sessionManager.send({
-            type: 'interrupt',
-            payload: {},
-            timestamp: Date.now(),
-          })
+      if (currentState === 'speaking') {
+        // 记录进入 speaking 的时间
+        if (!wasSpeaking.current) {
+          wasSpeaking.current = true
+          speakingStartTime.current = Date.now()
         }
-      } else if (sessionManager.getState() !== 'speaking') {
+
+        // speaking 状态下：不发送 audio 到服务端（服务端在生成 TTS，不需要 ASR）
+        // 仅做本地 VAD 打断检测
+        if (!interruptSent.current) {
+          // 保护期内不检测 VAD，避免扬声器回声误触发
+          const elapsed = Date.now() - speakingStartTime.current
+          if (elapsed > VAD_GRACE_PERIOD_MS) {
+            const rms = calculateRMS(base64)
+            if (rms > VAD_THRESHOLD) {
+              interruptSent.current = true
+              console.log('[useAudio] VAD interrupt, RMS:', Math.round(rms))
+              // 立即清空播放队列，不等服务端状态变更
+              clearPlayback()
+              sessionManager.send({
+                type: 'interrupt',
+                payload: {},
+                timestamp: Date.now(),
+              })
+            }
+          }
+        }
+      } else {
+        // 非 speaking 状态：正常发送音频到后端
+        wasSpeaking.current = false
         interruptSent.current = false
+        sessionManager.send({
+          type: 'audio_chunk',
+          payload: { audio: base64 },
+          timestamp: Date.now(),
+        })
       }
     })
 
