@@ -10,7 +10,7 @@ const SERVER_HOST = process.env.EXPO_PUBLIC_SERVER_HOST || '192.168.100.241'
 const SERVER_PORT = Number(process.env.EXPO_PUBLIC_SERVER_PORT) || 9527
 const SERVER_BASE = `http://${SERVER_HOST}:${SERVER_PORT}`
 const SERVER_URL = `ws://${SERVER_HOST}:${SERVER_PORT}/ws`
-const MODEL_URL = `${SERVER_BASE}/vrm/default.vrm`
+const MODEL_URL = `${SERVER_BASE}/vrm/default.vrm?raw=true`
 
 export default function MainScreen() {
   const { connected, state, transition } = useSession(SERVER_URL)

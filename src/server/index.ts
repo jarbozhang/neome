@@ -156,10 +156,16 @@ const start = async () => {
 
     app.get('/vrm/:filename', async (request, reply) => {
       const { filename } = request.params as { filename: string }
+      const { raw } = request.query as { raw?: string }
       const filePath = path.resolve(__dirname, '../../assets/models', filename)
 
       if (!fs.existsSync(filePath)) {
         return reply.code(404).send({ error: 'VRM not found' })
+      }
+
+      // raw=true: 返回原始 VRM（MToon 渲染需要保留原始 alpha）
+      if (raw === 'true') {
+        return reply.type('model/gltf-binary').send(fs.readFileSync(filePath))
       }
 
       // 缓存命中

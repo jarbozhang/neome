@@ -51,17 +51,27 @@ function getWebViewHTML(modelUrl: string): string {
       camera.position.set(0, 1.3, 1.5)
       camera.lookAt(0, 1.2, 0)
 
-      renderer = new THREE.WebGLRenderer({ antialias: true, premultipliedAlpha: false })
+      renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        alpha: true,
+        premultipliedAlpha: false,
+      })
       renderer.setSize(window.innerWidth, window.innerHeight)
       renderer.setPixelRatio(window.devicePixelRatio)
       renderer.outputColorSpace = THREE.SRGBColorSpace
       document.body.appendChild(renderer.domElement)
 
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.6)
-      scene.add(ambientLight)
-      const dirLight = new THREE.DirectionalLight(0xffffff, 0.8)
-      dirLight.position.set(1, 2, 1)
-      scene.add(dirLight)
+      // HemisphereLight: 天空暖白→地面冷灰渐变，让 MToon 也有自然明暗过渡
+      const hemiLight = new THREE.HemisphereLight(0xfff5ee, 0x8899aa, 0.9)
+      scene.add(hemiLight)
+      // 主光（正前偏右上方，适中强度）
+      const keyLight = new THREE.DirectionalLight(0xfff8f0, 1.1)
+      keyLight.position.set(0.5, 2, 2)
+      scene.add(keyLight)
+      // 补光（左侧）
+      const fillLight = new THREE.DirectionalLight(0xffffff, 0.4)
+      fillLight.position.set(-1, 1, 1)
+      scene.add(fillLight)
 
       window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight
@@ -166,9 +176,9 @@ function getWebViewHTML(modelUrl: string): string {
         camera.far = 100
         camera.updateProjectionMatrix()
 
-        // MToon → MeshStandardMaterial (处理单材质和多材质数组)
-        // TODO Phase 4: 眼睛半透明叠层被 iOS WebGL premultiply 压暗，需自定义 shader 或服务端特殊处理
-        function replaceMat(oldMat) {
+        // 混合策略：Face 保留 MToon（眼部正确）+ Body/Hair 用 PBR
+        // 通过亮化 PBR body + 提高 roughness 来匹配 MToon face 的亮度和质感
+        function toPBR(oldMat) {
           let color = new THREE.Color(0xffffff)
           if (oldMat.color) color.copy(oldMat.color)
           else if (oldMat.uniforms?.litFactor?.value) color.copy(oldMat.uniforms.litFactor.value)
@@ -181,10 +191,10 @@ function getWebViewHTML(modelUrl: string): string {
           const mat = new THREE.MeshStandardMaterial({
             color,
             side: THREE.DoubleSide,
-            transparent: false,
-            opacity: 1.0,
-            roughness: 0.6,
+            roughness: 0.65,
             metalness: 0.0,
+            transparent: false,
+            alphaTest: (oldMat.alphaTest || 0) > 0 ? (oldMat.alphaTest || 0.5) : 0,
           })
           if (tex) {
             tex.premultiplyAlpha = false
@@ -194,12 +204,37 @@ function getWebViewHTML(modelUrl: string): string {
           }
           return mat
         }
+
         vrmScene.traverse((child) => {
-          if (child.isMesh && child.material) {
-            child.frustumCulled = false
-            child.visible = true
+          if (!child.isMesh || !child.material) return
+          child.frustumCulled = false
+          child.visible = true
+
+          const isFace = /face/i.test(child.name)
+          if (isFace) {
+            // Face: 保留 MToon，仅修正纹理色彩空间
             const mats = Array.isArray(child.material) ? child.material : [child.material]
-            child.material = mats.length === 1 ? replaceMat(mats[0]) : mats.map(m => replaceMat(m))
+            mats.forEach((mat) => {
+              if (mat.map) {
+                mat.map.colorSpace = THREE.SRGBColorSpace
+                mat.map.needsUpdate = true
+              }
+              if (mat.uniforms) {
+                for (const key of Object.keys(mat.uniforms)) {
+                  const val = mat.uniforms[key]?.value
+                  if (val && val.isTexture) {
+                    val.colorSpace = THREE.SRGBColorSpace
+                    val.needsUpdate = true
+                  }
+                }
+              }
+              mat.needsUpdate = true
+            })
+          } else {
+            // Body/Hair: 替换为亮化 PBR
+            const mats = Array.isArray(child.material) ? child.material : [child.material]
+            const newMats = mats.map(m => toPBR(m))
+            child.material = newMats.length === 1 ? newMats[0] : newMats
           }
         })
 
@@ -402,6 +437,8 @@ const AvatarWebView = forwardRef<AvatarWebViewRef, AvatarWebViewProps>(
           onReady?.()
         } else if (msg.type === 'loading') {
           console.log('[AvatarWebView] Loading:', JSON.stringify(msg.data))
+        } else if (msg.type === 'debug') {
+          console.log('[AvatarWebView] DEBUG:', JSON.stringify(msg.data))
         } else if (msg.type === 'error') {
           console.error('[AvatarWebView] Error:', msg.data?.message)
           onError?.(msg.data?.message)
