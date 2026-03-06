@@ -5,6 +5,15 @@
 SERVER_PORT=9527
 EXPO_PORT=9528
 
+# 自动检测 LAN IP 并更新 .env
+LAN_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null)
+if [ -n "$LAN_IP" ]; then
+  sed -i '' "s/^EXPO_PUBLIC_SERVER_HOST=.*/EXPO_PUBLIC_SERVER_HOST=$LAN_IP/" .env
+  echo "📡 LAN IP: $LAN_IP (已写入 .env)"
+else
+  echo "⚠️  无法检测 LAN IP，使用 .env 中的现有值"
+fi
+
 echo "🔧 清理占用端口..."
 lsof -ti:$SERVER_PORT | xargs kill -9 2>/dev/null
 lsof -ti:$EXPO_PORT | xargs kill -9 2>/dev/null
