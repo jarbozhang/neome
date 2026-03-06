@@ -5,7 +5,7 @@ type MessageHandler = (msg: WSMessage) => void
 // 合法状态转换表
 const VALID_TRANSITIONS: Record<SessionState, SessionState[]> = {
   idle: ['listening'],
-  listening: ['thinking', 'idle'],
+  listening: ['thinking', 'speaking', 'idle'],
   thinking: ['speaking', 'listening', 'idle'],
   speaking: ['listening', 'idle'],
 }

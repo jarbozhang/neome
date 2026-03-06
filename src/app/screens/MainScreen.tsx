@@ -52,26 +52,6 @@ export default function MainScreen() {
       <TouchableOpacity style={styles.resetButton} onPress={() => { clearPlayback(); resetSession() }}>
         <Text style={styles.resetButtonText}>新顾客</Text>
       </TouchableOpacity>
-      {/* Debug 信息 */}
-      <View style={styles.debugBar}>
-        <Text style={styles.debugText}>
-          WS: {connected ? '🟢' : '🔴'} | {state}
-        </Text>
-      </View>
-      {/* Debug 状态切换按钮 */}
-      <View style={styles.stateButtons}>
-        {(['idle', 'listening', 'thinking', 'speaking'] as SessionState[]).map((s) => (
-          <TouchableOpacity
-            key={s}
-            style={[styles.stateButton, state === s && styles.stateButtonActive]}
-            onPress={() => handleStateChange(s)}
-          >
-            <Text style={[styles.stateButtonText, state === s && styles.stateButtonTextActive]}>
-              {s}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
     </View>
   )
 }

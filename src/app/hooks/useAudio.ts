@@ -19,6 +19,9 @@ const CAPTURE_SAMPLE_RATE = 16000
 const CAPTURE_CHANNELS = 1
 const CAPTURE_BITS = 16
 
+// TTS 播放增益（1.0 = 原始音量）
+const TTS_GAIN = 10.0
+
 const TTS_SAMPLE_RATE = 24000
 
 // VAD: 16-bit PCM RMS 阈值（speaking 状态下检测用户说话打断）
@@ -30,10 +33,10 @@ const VAD_THRESHOLD = 2000
 const VAD_GRACE_PERIOD_MS = 2000
 
 // 收到多少个 TTS chunk 后开始播放（减小首帧延迟 vs 防止断续）
-const PLAYBACK_START_CHUNKS = 3
+const PLAYBACK_START_CHUNKS = 6
 
 // speaking 结束后回声冷却期（ms），防止扬声器回声被 ASR 识别成用户输入
-const ECHO_COOLDOWN_MS = 1500
+const ECHO_COOLDOWN_MS = 300
 
 // ---------- 工具函数 ----------
 
@@ -58,8 +61,15 @@ function pcmChunksToWav(chunks: string[], sampleRate: number): Uint8Array {
   const allBytes: number[] = []
   for (const chunk of chunks) {
     const raw = atob(chunk)
-    for (let i = 0; i < raw.length; i++) {
-      allBytes.push(raw.charCodeAt(i))
+    for (let i = 0; i < raw.length; i += 2) {
+      const lo = raw.charCodeAt(i)
+      const hi = i + 1 < raw.length ? raw.charCodeAt(i + 1) : 0
+      let sample = lo | (hi << 8)
+      if (sample >= 0x8000) sample -= 0x10000
+      // 应用增益并 clamp 到 16-bit 范围
+      sample = Math.max(-32768, Math.min(32767, Math.round(sample * TTS_GAIN)))
+      const us = sample < 0 ? sample + 0x10000 : sample
+      allBytes.push(us & 0xFF, (us >> 8) & 0xFF)
     }
   }
 
@@ -113,6 +123,14 @@ export function useAudio(avatarRef?: RefObject<AvatarWebViewRef | null>) {
   const wasSpeaking = useRef(false)    // 追踪上一次是否处于 speaking
   const speakingEndTime = useRef(0)    // 离开 speaking 状态的时间戳（回声冷却用）
   const expectedServerGen = useRef<number | null>(null)  // 服务端 generation 校验
+  const pendingSound = useRef<Audio.Sound | null>(null)  // 双缓冲：预加载的下一批 Sound
+  const pendingFile = useRef<File | null>(null)           // 双缓冲：预加载的文件引用
+  const preparingNext = useRef(false)                     // 是否正在预加载
+  const prebufferTimer = useRef<ReturnType<typeof setTimeout> | null>(null)  // 预缓冲延迟计时器
+  const firstChunkTime = useRef(0)                        // 首个 chunk 到达时间（超时用）
+  const accumulateTimer = useRef<ReturnType<typeof setTimeout> | null>(null) // 等 isFinal 超时计时器
+  const visemeBuffer = useRef<any[]>([])  // 缓冲所有 viseme 帧，等播放时重放
+  const visemePlaybackTimer = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // 设置音频模式
   useEffect(() => {
@@ -128,20 +146,24 @@ export function useAudio(avatarRef?: RefObject<AvatarWebViewRef | null>) {
       // 服务端 generation 校验：首包记录，后续不匹配则丢弃
       if (payload.generation !== undefined) {
         if (expectedServerGen.current === null) {
+          console.log('[useAudio] New stream, serverGen:', payload.generation, 'isFinal:', !!payload.isFinal, 'hasAudio:', !!payload.audio)
           expectedServerGen.current = payload.generation
         } else if (payload.generation !== expectedServerGen.current) {
+          console.log('[useAudio] DROPPED chunk, expected:', expectedServerGen.current, 'got:', payload.generation)
           return  // 旧 generation 的音频，丢弃
         }
       }
       if (payload.audio) {
-        enqueueChunk(payload.audio)
+        enqueueChunk(payload.audio, !!payload.isFinal)
+      } else if (payload.isFinal) {
+        // 无音频的 isFinal 信号：立即触发预缓冲合并剩余 chunks
+        flushAllChunks()
       }
-      // 转发 viseme 数据到 WebView
-      if (payload.visemes && payload.visemes.length > 0 && avatarRef?.current) {
-        avatarRef.current.sendMessage({
-          type: 'set_visemes',
-          data: { visemes: payload.visemes },
-        })
+      // 缓冲 viseme 数据，等实际播放时再按序发给 WebView
+      if (payload.visemes && payload.visemes.length > 0) {
+        for (const v of payload.visemes) {
+          visemeBuffer.current.push(v)
+        }
       }
     })
 
@@ -259,21 +281,116 @@ export function useAudio(avatarRef?: RefObject<AvatarWebViewRef | null>) {
 
   // ---------- TTS 音频播放 ----------
 
-  const enqueueChunk = (base64: string) => {
+  const enqueueChunk = (base64: string, isFinal: boolean = false) => {
     playbackQueue.current.push(base64)
 
-    if (!isPlaying.current && playbackQueue.current.length >= PLAYBACK_START_CHUNKS) {
-      playNextBatch()
+    // 记录首个 chunk 到达时间
+    if (firstChunkTime.current === 0) {
+      firstChunkTime.current = Date.now()
+    }
+
+    if (isFinal) {
+      // TTS 结束：立即播放/预缓冲全部
+      flushAllChunks()
+    } else if (!isPlaying.current) {
+      // 未开始播放：等 isFinal，但设超时防止长回复延迟过大
+      if (!accumulateTimer.current) {
+        accumulateTimer.current = setTimeout(() => {
+          accumulateTimer.current = null
+          if (!isPlaying.current && playbackQueue.current.length > 0) {
+            console.log('[useAudio] Accumulate timeout, starting playback, queue:', playbackQueue.current.length)
+            playNextBatch()
+          }
+        }, 2000)
+      }
+    } else if (isPlaying.current && !pendingSound.current && !preparingNext.current) {
+      // 已在播放：延迟预缓冲
+      if (!prebufferTimer.current) {
+        prebufferTimer.current = setTimeout(() => {
+          prebufferTimer.current = null
+          if (playbackQueue.current.length > 0 && !pendingSound.current && !preparingNext.current) {
+            console.log('[useAudio] Deferred prebuffer, queue:', playbackQueue.current.length)
+            prepareNextBatch()
+          }
+        }, 300)
+      }
     }
   }
 
-  const playNextBatch = async () => {
-    if (playbackQueue.current.length === 0) {
-      isPlaying.current = false
-      return
+  /** 收到 isFinal 或超时：将全部 chunks 合并为一批播放 */
+  const flushAllChunks = () => {
+    // 清理计时器
+    if (accumulateTimer.current) {
+      clearTimeout(accumulateTimer.current)
+      accumulateTimer.current = null
+    }
+    if (prebufferTimer.current) {
+      clearTimeout(prebufferTimer.current)
+      prebufferTimer.current = null
     }
 
-    isPlaying.current = true
+    if (!isPlaying.current && playbackQueue.current.length > 0) {
+      console.log('[useAudio] isFinal: playing ALL chunks in one batch, queue:', playbackQueue.current.length)
+      playNextBatch()
+    } else if (isPlaying.current && playbackQueue.current.length > 0 && !pendingSound.current && !preparingNext.current) {
+      console.log('[useAudio] isFinal: prebuffer remaining, queue:', playbackQueue.current.length)
+      prepareNextBatch()
+    }
+  }
+
+  /** 延迟触发预缓冲，让 chunks 积累 300ms 再构建，减少批次切换次数 */
+  const schedulePrebuffer = () => {
+    if (prebufferTimer.current || pendingSound.current || preparingNext.current) return
+    prebufferTimer.current = setTimeout(() => {
+      prebufferTimer.current = null
+      if (playbackQueue.current.length > 0 && !pendingSound.current && !preparingNext.current) {
+        console.log('[useAudio] Deferred prebuffer, queue:', playbackQueue.current.length)
+        prepareNextBatch()
+      }
+    }, 300)
+  }
+
+  /** 音频开始播放时，按 30ms 间隔重放缓冲的 viseme 帧 */
+  const startVisemePlayback = () => {
+    stopVisemePlayback()
+    const allVisemes = visemeBuffer.current.splice(0)
+    if (allVisemes.length === 0 || !avatarRef?.current) return
+
+    // 告诉 WebView 进入 speaking 状态（覆盖服务端时序）
+    avatarRef.current.sendMessage({ type: 'set_state', data: 'speaking' })
+
+    let index = 0
+    // 每 30ms 发一帧 viseme（与服务端生成帧率一致）
+    visemePlaybackTimer.current = setInterval(() => {
+      if (index >= allVisemes.length || !avatarRef?.current) {
+        if (visemePlaybackTimer.current) {
+          clearInterval(visemePlaybackTimer.current)
+          visemePlaybackTimer.current = null
+        }
+        return
+      }
+      avatarRef.current.sendMessage({
+        type: 'set_visemes',
+        data: { visemes: [allVisemes[index]] },
+      })
+      index++
+    }, 30)
+  }
+
+  /** 停止 viseme 重放 */
+  const stopVisemePlayback = () => {
+    if (visemePlaybackTimer.current) {
+      clearInterval(visemePlaybackTimer.current)
+      visemePlaybackTimer.current = null
+    }
+  }
+
+  /** 预加载下一批音频（双缓冲：在当前批次播放时提前创建 Sound） */
+  const prepareNextBatch = async () => {
+    if (preparingNext.current || pendingSound.current) return
+    if (playbackQueue.current.length === 0) return
+
+    preparingNext.current = true
     const currentGen = generation.current
 
     const chunks = playbackQueue.current.splice(0)
@@ -286,21 +403,106 @@ export function useAudio(avatarRef?: RefObject<AvatarWebViewRef | null>) {
     try {
       file.write(wavBase64, { encoding: 'base64' })
 
-      // 打断检查
+      if (currentGen !== generation.current) {
+        try { file.delete() } catch (_) {}
+        preparingNext.current = false
+        return
+      }
+
+      const { sound } = await Audio.Sound.createAsync({ uri: file.uri })
+
+      if (currentGen !== generation.current) {
+        sound.unloadAsync()
+        try { file.delete() } catch (_) {}
+        preparingNext.current = false
+        return
+      }
+
+      pendingSound.current = sound
+      pendingFile.current = file
+    } catch (err) {
+      console.error('[useAudio] Prepare next batch error:', err)
+      try { file.delete() } catch (_) {}
+    }
+
+    preparingNext.current = false
+  }
+
+  const playNextBatch = async () => {
+    const t0 = Date.now()
+
+    // 双缓冲：优先使用预加载的 Sound（零间隙切换）
+    if (pendingSound.current) {
+      isPlaying.current = true
+      const currentGen = generation.current
+      const sound = pendingSound.current
+      const file = pendingFile.current
+      pendingSound.current = null
+      pendingFile.current = null
+
+      if (currentGen !== generation.current) {
+        sound.unloadAsync()
+        try { file?.delete() } catch (_) {}
+        isPlaying.current = false
+        return
+      }
+
+      currentSound.current = sound
+
+      sound.setOnPlaybackStatusUpdate((status) => {
+        if (status.isLoaded && status.didJustFinish) {
+          console.log('[useAudio] Batch finished (buffered), pending:', !!pendingSound.current, 'queue:', playbackQueue.current.length)
+          sound.unloadAsync()
+          try { file?.delete() } catch (_) {}
+          currentSound.current = null
+          playNextBatch()
+        }
+      })
+
+      await sound.playAsync()
+      startVisemePlayback()
+      console.log('[useAudio] Batch started (buffered), switchTime:', Date.now() - t0, 'ms')
+      // 延迟预加载下一批，让 chunks 积累更多
+      schedulePrebuffer()
+      return
+    }
+
+    // 无预加载可用：回退到原始逻辑
+    if (playbackQueue.current.length === 0) {
+      console.log('[useAudio] No more chunks, playback ended')
+      isPlaying.current = false
+      firstChunkTime.current = 0
+      expectedServerGen.current = null
+      stopVisemePlayback()
+      avatarRef?.current?.sendMessage({ type: 'set_state', data: 'listening' })
+      return
+    }
+
+    isPlaying.current = true
+    const currentGen = generation.current
+
+    try {
+    const chunks = playbackQueue.current.splice(0)
+    const wavData = pcmChunksToWav(chunks, TTS_SAMPLE_RATE)
+    const wavBase64 = uint8ToBase64(wavData)
+
+    const fileName = `tts_${++fileCounter.current}.wav`
+    const file = new File(Paths.cache, fileName)
+
+      file.write(wavBase64, { encoding: 'base64' })
+
       if (currentGen !== generation.current) {
         try { file.delete() } catch (_) {}
         isPlaying.current = false
         return
       }
 
-      // 播放前重新 assert 扬声器路由（expo-av 可能覆盖 AVAudioSession）
-      try { setDefaultToSpeaker() } catch (_) {}
-
       const { sound } = await Audio.Sound.createAsync({ uri: file.uri })
       currentSound.current = sound
 
       sound.setOnPlaybackStatusUpdate((status) => {
         if (status.isLoaded && status.didJustFinish) {
+          console.log('[useAudio] Batch finished (unbuffered), pending:', !!pendingSound.current, 'queue:', playbackQueue.current.length)
           sound.unloadAsync()
           try { file.delete() } catch (_) {}
           currentSound.current = null
@@ -309,6 +511,10 @@ export function useAudio(avatarRef?: RefObject<AvatarWebViewRef | null>) {
       })
 
       await sound.playAsync()
+      startVisemePlayback()
+      console.log('[useAudio] Batch started (unbuffered), loadTime:', Date.now() - t0, 'ms')
+      // 延迟预加载下一批，让 chunks 积累更多
+      schedulePrebuffer()
     } catch (err) {
       console.error('[useAudio] Playback error:', err)
       try { file.delete() } catch (_) {}
@@ -325,6 +531,30 @@ export function useAudio(avatarRef?: RefObject<AvatarWebViewRef | null>) {
     expectedServerGen.current = null  // 重置服务端 generation 校验
     playbackQueue.current = []
     isPlaying.current = false
+    preparingNext.current = false
+    firstChunkTime.current = 0
+    if (prebufferTimer.current) {
+      clearTimeout(prebufferTimer.current)
+      prebufferTimer.current = null
+    }
+    if (accumulateTimer.current) {
+      clearTimeout(accumulateTimer.current)
+      accumulateTimer.current = null
+    }
+
+    // 清理 viseme 播放
+    stopVisemePlayback()
+    visemeBuffer.current = []
+
+    // 清理预加载的 Sound
+    if (pendingSound.current) {
+      try { await pendingSound.current.unloadAsync() } catch (_) {}
+      pendingSound.current = null
+    }
+    if (pendingFile.current) {
+      try { pendingFile.current.delete() } catch (_) {}
+      pendingFile.current = null
+    }
 
     if (currentSound.current) {
       try {

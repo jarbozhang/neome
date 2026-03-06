@@ -48,7 +48,7 @@ const AUDIO_BUFFER_MAX = 100
 // 每帧 ~30ms (24kHz 16-bit mono → 720 samples = 1440 bytes)
 const VISEME_FRAME_BYTES = 1440
 // RMS 阈值：低于此值视为静默
-const VISEME_SILENCE_THRESHOLD = 800
+const VISEME_SILENCE_THRESHOLD = 400
 // 元音切换最小间隔 (ms)
 const VISEME_VOWEL_INTERVAL_MS = 180
 // 可用元音 viseme
@@ -68,7 +68,6 @@ function generateVisemes(int16Buf: Buffer): VisemeEvent[] {
   let offset = 0
   let frameTime = 0
   const now = Date.now()
-
   while (offset + 1 < totalBytes) {
     const end = Math.min(offset + VISEME_FRAME_BYTES, totalBytes)
     const sampleCount = Math.floor((end - offset) / 2)
@@ -85,8 +84,8 @@ function generateVisemes(int16Buf: Buffer): VisemeEvent[] {
     if (rms < VISEME_SILENCE_THRESHOLD) {
       visemes.push({ viseme: 'sil', time: frameTime, weight: 0 })
     } else {
-      // 归一化 weight: RMS 800~16000 → 0.1~1.0
-      const weight = Math.min(1.0, Math.max(0.1, (rms - VISEME_SILENCE_THRESHOLD) / 15200))
+      // 归一化 weight: RMS 800~4000 → 0.3~1.0（TTS 音频 RMS 通常 1000~5000）
+      const weight = Math.min(1.0, Math.max(0.3, 0.3 + 0.7 * (rms - VISEME_SILENCE_THRESHOLD) / 3200))
 
       // 切换元音
       if (now - lastVowelTime >= VISEME_VOWEL_INTERVAL_MS) {
@@ -477,9 +476,8 @@ export class VoiceSession {
     )
     this.doubaoWs?.send(finishFrame)
 
-    this.internalState = 'connecting'
+    this.internalState = 'finishing'  // 等待 SessionFinished (250) 事件
     this.sessionId = null
-    this.sendStartSession()
   }
 
   getGeneration(): number {
@@ -666,6 +664,15 @@ export class VoiceSession {
         console.log('[VoiceSession] ConnectionFinished')
         break
       }
+      case 152: {
+        // SessionFinished → 旧 session 已关闭，可以开新 session
+        console.log('[VoiceSession] SessionFinished')
+        if (this.internalState === 'finishing') {
+          this.internalState = 'connecting'
+          this.sendStartSession()
+        }
+        break
+      }
       case 150: {
         // SessionStarted → ready，可以开始接收音频
         console.log('[VoiceSession] SessionStarted, session ready')
@@ -823,6 +830,15 @@ export class VoiceSession {
     // Event 359: TTS 音频结束 → 回到 listening
     if (eventNum === 359) {
       this.isSpeaking = false
+      // 先发 isFinal 标记，让客户端合并剩余 chunks
+      this.safeSendToClient({
+        type: 'reply_audio',
+        payload: {
+          isFinal: true,
+          generation: this.generation,
+        },
+        timestamp: Date.now(),
+      })
       this.safeSendToClient({
         type: 'state_change',
         payload: { state: 'listening' as SessionState },
@@ -831,16 +847,26 @@ export class VoiceSession {
     }
   }
 
+  private ttsChunkIndex = 0
+  private ttsFirstChunkTime = 0
+
   /** 处理豆包发来的 TTS 音频帧（pcm_s16le 直出，无需转换） */
   private handleServerAudio(pcmBuf: Buffer): void {
     if (!this.isSpeaking) {
       this.isSpeaking = true
+      this.ttsChunkIndex = 0
+      this.ttsFirstChunkTime = Date.now()
       this.safeSendToClient({
         type: 'state_change',
         payload: { state: 'speaking' as SessionState },
         timestamp: Date.now(),
       })
     }
+
+    this.ttsChunkIndex++
+    const elapsed = Date.now() - this.ttsFirstChunkTime
+    const durationMs = (pcmBuf.length / 2 / 24000) * 1000  // PCM 16-bit mono 24kHz
+    console.log(`[TTS] chunk #${this.ttsChunkIndex} | +${elapsed}ms | ${pcmBuf.length}B | ~${durationMs.toFixed(0)}ms audio`)
 
     const audioBase64 = pcmBuf.toString('base64')
     const visemes = generateVisemes(pcmBuf)
