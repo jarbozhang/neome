@@ -62,7 +62,7 @@ let lastVowelIndex = 0
  * 每 ~30ms 一帧，计算 RMS → 映射 mouth weight
  * 超阈值时随机切换元音，静默帧发 sil
  */
-function generateVisemes(int16Buf: Buffer): VisemeEvent[] {
+export function generateVisemes(int16Buf: Buffer): VisemeEvent[] {
   const visemes: VisemeEvent[] = []
   const totalBytes = int16Buf.length
   let offset = 0
@@ -110,7 +110,7 @@ function generateVisemes(int16Buf: Buffer): VisemeEvent[] {
 }
 
 // ---------- VoiceSession 内部状态机 ----------
-type VoiceSessionState = 'init' | 'connecting' | 'ready' | 'closing' | 'closed'
+type VoiceSessionState = 'init' | 'connecting' | 'ready' | 'finishing' | 'closing' | 'closed'
 
 // ---------- 二进制协议编码 ----------
 
@@ -123,7 +123,7 @@ type VoiceSessionState = 'init' | 'connecting' | 'ready' | 'closing' | 'closed'
  * @param payloadBuf 实际 payload
  * @param includeSessionId 是否在 payload 前写入 sessionId 长度 + 内容
  */
-function encodeFrame(
+export function encodeFrame(
   msgType: number,
   serialization: number,
   eventNum: number,
@@ -164,7 +164,7 @@ function encodeFrame(
   return Buffer.concat(parts)
 }
 
-function encodeJsonFrame(
+export function encodeJsonFrame(
   msgType: number,
   eventNum: number,
   obj: Record<string, unknown>,
@@ -175,7 +175,7 @@ function encodeJsonFrame(
   return encodeFrame(msgType, SERIAL_JSON, eventNum, payloadBuf, sessionId, includeSessionId)
 }
 
-function encodeAudioFrame(pcmBuf: Buffer, sessionId: string): Buffer {
+export function encodeAudioFrame(pcmBuf: Buffer, sessionId: string): Buffer {
   // AudioOnlyClient, Raw serialization, event=200, 包含 sessionId
   return encodeFrame(
     MSG_TYPE_AUDIO_ONLY_CLIENT,
@@ -189,7 +189,7 @@ function encodeAudioFrame(pcmBuf: Buffer, sessionId: string): Buffer {
 
 // ---------- 二进制协议解码 ----------
 
-interface DecodedFrame {
+export interface DecodedFrame {
   msgType: number
   flags: number
   serialization: number
@@ -199,7 +199,7 @@ interface DecodedFrame {
   payload: Buffer
 }
 
-function decodeFrame(data: Buffer): DecodedFrame | null {
+export function decodeFrame(data: Buffer): DecodedFrame | null {
   if (data.length < 4) return null
 
   const byte1 = data[1]
@@ -272,7 +272,7 @@ const SYSTEM_ROLE = `你是"小Neo"，一家咖啡店的点单助手。友好、
 - 顾客说"有什么好喝的" → 正常推荐，不含标记`
 
 // ---------- StartSession payload ----------
-function buildStartSessionPayload(dialogId?: string | null): Record<string, unknown> {
+export function buildStartSessionPayload(dialogId?: string | null): Record<string, unknown> {
   const payload: Record<string, unknown> = {
     asr: {
       extra: {
