@@ -117,7 +117,7 @@ export function useAudio(avatarRef?: RefObject<AvatarWebViewRef | null>) {
   const isPlaying = useRef(false)
   const currentSound = useRef<Audio.Sound | null>(null)
   const generation = useRef(0)
-  const fileCounter = useRef(0)
+  const fileSlot = useRef(0)  // 0 or 1, rotating between tts_0.wav and tts_1.wav
   const interruptSent = useRef(false)  // 防止 speaking 期间重复发送 interrupt
   const speakingStartTime = useRef(0)  // 进入 speaking 状态的时间戳
   const wasSpeaking = useRef(false)    // 追踪上一次是否处于 speaking
@@ -397,7 +397,7 @@ export function useAudio(avatarRef?: RefObject<AvatarWebViewRef | null>) {
     const wavData = pcmChunksToWav(chunks, TTS_SAMPLE_RATE)
     const wavBase64 = uint8ToBase64(wavData)
 
-    const fileName = `tts_${++fileCounter.current}.wav`
+    const fileName = `tts_${fileSlot.current ^= 1}.wav`
     const file = new File(Paths.cache, fileName)
 
     try {
@@ -486,7 +486,7 @@ export function useAudio(avatarRef?: RefObject<AvatarWebViewRef | null>) {
     const wavData = pcmChunksToWav(chunks, TTS_SAMPLE_RATE)
     const wavBase64 = uint8ToBase64(wavData)
 
-    const fileName = `tts_${++fileCounter.current}.wav`
+    const fileName = `tts_${fileSlot.current ^= 1}.wav`
     const file = new File(Paths.cache, fileName)
 
       file.write(wavBase64, { encoding: 'base64' })

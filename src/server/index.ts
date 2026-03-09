@@ -203,15 +203,22 @@ const start = async () => {
         }),
       }
 
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: 'Basic OTQzOTA5MzRmODAwNDIwZDo2RHh0dURiVTNuUDZxR2Vzdlp6VUlPS2NGS2FBMXg0ZlNIVGNVYkhSQ3RC',
-        },
-        body: JSON.stringify(body),
-      })
-      console.log('[MQTT] makeCoffee response:', res.status)
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 5000)
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Basic OTQzOTA5MzRmODAwNDIwZDo2RHh0dURiVTNuUDZxR2Vzdlp6VUlPS2NGS2FBMXg0ZlNIVGNVYkhSQ3RC',
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        })
+        console.log('[MQTT] makeCoffee response:', res.status)
+      } finally {
+        clearTimeout(timeout)
+      }
     }
 
     // WebSocket 路由（必须在 register(websocket) 之后注册）

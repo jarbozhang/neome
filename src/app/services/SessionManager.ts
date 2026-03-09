@@ -15,6 +15,7 @@ export class SessionManager {
   private state: SessionState = 'idle'
   private listeners: Map<WSMessageType, MessageHandler[]> = new Map()
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private reconnectAttempts: number = 0
   private url: string = ''
   private isConnecting: boolean = false
 
@@ -36,6 +37,7 @@ export class SessionManager {
 
       this.ws.onopen = () => {
         this.isConnecting = false
+        this.reconnectAttempts = 0
         console.log('[SessionManager] Connected')
         this.onConnectionChange?.(true)
         this.clearReconnectTimer()
@@ -69,10 +71,17 @@ export class SessionManager {
 
   private scheduleReconnect(): void {
     this.clearReconnectTimer()
+    if (this.reconnectAttempts >= 10) {
+      console.warn('[SessionManager] Max reconnect attempts (10) reached, giving up')
+      return
+    }
+    // 指数退避: 3s → 6s → 12s → 24s → 30s (cap)
+    const delay = Math.min(3000 * Math.pow(2, this.reconnectAttempts), 30000)
+    this.reconnectAttempts++
     this.reconnectTimer = setTimeout(() => {
-      console.log('[SessionManager] Reconnecting...')
+      console.log(`[SessionManager] Reconnecting (attempt ${this.reconnectAttempts}/10, delay ${delay}ms)...`)
       this.doConnect()
-    }, 3000)
+    }, delay)
   }
 
   private clearReconnectTimer(): void {

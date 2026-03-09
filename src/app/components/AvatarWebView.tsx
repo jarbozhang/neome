@@ -258,9 +258,13 @@ function getWebViewHTML(modelUrl: string): string {
               mat.needsUpdate = true
             })
           } else {
-            // Body/Hair: 替换为亮化 PBR
+            // Body/Hair: 替换为亮化 PBR，释放旧 MToon 材质
             const mats = Array.isArray(child.material) ? child.material : [child.material]
-            const newMats = mats.map(m => toPBR(m))
+            const newMats = mats.map(m => {
+              const pbr = toPBR(m)
+              m.dispose()
+              return pbr
+            })
             child.material = newMats.length === 1 ? newMats[0] : newMats
           }
         })
