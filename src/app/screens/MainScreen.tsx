@@ -46,12 +46,18 @@ export default function MainScreen() {
   }, [transition])
 
   return (
-    <View style={styles.container}>
+    <View style={styles.container} testID="main-screen">
       <AvatarWebView ref={avatarRef} modelUrl={MODEL_URL} serverBaseUrl={SERVER_BASE} onReady={handleReady} onError={handleError} />
       {/* 新顾客按钮 */}
-      <TouchableOpacity style={styles.resetButton} onPress={() => { clearPlayback(); resetSession() }}>
+      <TouchableOpacity testID="reset-button" style={styles.resetButton} onPress={() => { clearPlayback(); resetSession() }}>
         <Text style={styles.resetButtonText}>新顾客</Text>
       </TouchableOpacity>
+      {__DEV__ && (
+        <View style={styles.debugLabel}>
+          <Text testID="status-label" style={styles.debugLabelText}>state:{state}</Text>
+          <Text testID="connection-label" style={styles.debugLabelText}>connected:{String(connected)}</Text>
+        </View>
+      )}
     </View>
   )
 }
@@ -73,6 +79,20 @@ const styles = StyleSheet.create({
   debugText: {
     color: '#fff',
     fontSize: 14,
+  },
+  debugLabel: {
+    position: 'absolute',
+    top: 60,
+    left: 16,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  debugLabelText: {
+    color: '#fff',
+    fontSize: 10,
+    fontFamily: 'monospace',
   },
   stateButtons: {
     position: 'absolute',

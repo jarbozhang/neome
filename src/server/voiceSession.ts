@@ -36,10 +36,11 @@ const EVENT_SAY_HELLO         = 300   // 主动触发欢迎语
 
 // 事件编号：Server → Client（不需要 SessionID/ConnectID 前缀的特殊事件）
 // 注意：event 50 (ConnectionStarted) 实际包含 connectId 字段，所以不在此集合中
-const SERVER_EVENTS_NO_SESSION_ID = new Set([51, 52])
+// 不含 sessionId 的事件（客户端 + 服务端）
+const EVENTS_NO_SESSION_ID = new Set([1, 2, 50, 51, 52, 100])
 
-// 豆包语音对话 API URL
-const DOUBAO_DIALOGUE_URL = 'wss://openspeech.bytedance.com/api/v3/realtime/dialogue'
+// 豆包语音对话 API URL（运行时读取，支持 E2E mock 覆盖）
+const getDoubaoUrl = () => process.env.DOUBAO_WS_URL || 'wss://openspeech.bytedance.com/api/v3/realtime/dialogue'
 
 // Pre-ready 音频缓冲上限
 const AUDIO_BUFFER_MAX = 100
@@ -237,7 +238,7 @@ export function decodeFrame(data: Buffer): DecodedFrame | null {
 
   let sessionId: string | null = null
   // 服务端发来的 FullServer/AudioOnlyServer，除特殊事件外都含 sessionId/connectId
-  if (hasEvent && eventNum !== null && !SERVER_EVENTS_NO_SESSION_ID.has(eventNum)) {
+  if (hasEvent && eventNum !== null && !EVENTS_NO_SESSION_ID.has(eventNum)) {
     if (data.length < offset + 4) return null
     const sidLen = data.readUInt32BE(offset)
     offset += 4
@@ -353,7 +354,7 @@ export class VoiceSession {
 
     try {
       console.log('[VoiceSession] Connecting to Doubao Dialogue API, connectId:', this.connectId)
-      this.doubaoWs = new WebSocket(DOUBAO_DIALOGUE_URL, {
+      this.doubaoWs = new WebSocket(getDoubaoUrl(), {
         headers: {
           'X-Api-Resource-Id': 'volc.speech.dialog',
           'X-Api-Access-Key':  accessToken,

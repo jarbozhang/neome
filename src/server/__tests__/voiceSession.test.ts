@@ -48,11 +48,11 @@ describe('Binary Protocol: encodeFrame & decodeFrame', () => {
   test('roundtrip: JSON payload with sessionId', () => {
     const payload = Buffer.from('{}', 'utf-8')
     const sessionId = 'test-session-123'
-    const frame = encodeFrame(0x1, 0x1, 100, payload, sessionId, true)
+    const frame = encodeFrame(0x1, 0x1, 200, payload, sessionId, true)
 
     const decoded = decodeFrame(frame)
     expect(decoded).not.toBeNull()
-    expect(decoded!.eventNum).toBe(100)
+    expect(decoded!.eventNum).toBe(200)
     expect(decoded!.sessionId).toBe(sessionId)
     expect(decoded!.payload.toString('utf-8')).toBe('{}')
   })
@@ -153,7 +153,7 @@ describe('Binary Protocol: encodeFrame & decodeFrame', () => {
 describe('encodeJsonFrame', () => {
   test('encodes JSON object correctly (with sessionId for roundtrip)', () => {
     const obj = { asr: { format: 'pcm' }, tts: { speaker: 'zh_female' } }
-    const frame = encodeJsonFrame(0x1, 100, obj, 'sess-id', true)
+    const frame = encodeJsonFrame(0x1, 200, obj, 'sess-id', true)
 
     const decoded = decodeFrame(frame)
     expect(decoded).not.toBeNull()
@@ -163,7 +163,7 @@ describe('encodeJsonFrame', () => {
   })
 
   test('encodes with sessionId when includeSessionId=true', () => {
-    const frame = encodeJsonFrame(0x1, 100, {}, 'my-session', true)
+    const frame = encodeJsonFrame(0x1, 200, {}, 'my-session', true)
     const decoded = decodeFrame(frame)
     expect(decoded).not.toBeNull()
     expect(decoded!.sessionId).toBe('my-session')

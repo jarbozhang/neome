@@ -1,0 +1,9 @@
+# Maestro E2E 全局配置
+# NeoMe 咖啡店数字人点单助手
+
+appId: com.neome.app
+
+# 全局超时：WebView 加载 VRM 模型需要较长时间
+onFlowStart:
+  - waitForAnimationToEnd:
+      timeout: 5000

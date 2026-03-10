@@ -1,0 +1,48 @@
+# 应用启动验证
+# 验证 App 启动、主屏幕可见、按钮可见、WebView 加载、初始状态
+
+appId: com.neome.app
+---
+- launchApp
+
+# 关闭可能出现的开发者菜单
+- runFlow:
+    when:
+      visible: "Continue"
+    commands:
+      - tapOn: "Continue"
+
+# 主屏幕容器可见
+- extendedWaitUntil:
+    visible:
+      id: "main-screen"
+    timeout: 15000
+
+- takeScreenshot: "01-main-screen-visible"
+
+# "新顾客"按钮可见
+- assertVisible:
+    id: "reset-button"
+
+- assertVisible: "新顾客"
+
+- takeScreenshot: "02-reset-button-visible"
+
+# WebView 加载
+- extendedWaitUntil:
+    visible:
+      id: "avatar-webview"
+    timeout: 15000
+
+- takeScreenshot: "03-webview-loaded"
+
+# 调试标签可见（DEV 模式）
+- extendedWaitUntil:
+    visible:
+      id: "status-label"
+    timeout: 5000
+
+- assertVisible:
+    id: "connection-label"
+
+- takeScreenshot: "04-debug-labels-visible"

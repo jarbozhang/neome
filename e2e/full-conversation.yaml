@@ -1,0 +1,43 @@
+# 完整对话流程验证
+# 验证 mock 服务器欢迎语触发后 App 进入 listening 状态
+# 注意：模拟器没有麦克风，主要验证服务端推送的欢迎语流程完成
+
+appId: com.neome.app
+---
+- launchApp
+
+- runFlow:
+    when:
+      visible: "Continue"
+    commands:
+      - tapOn: "Continue"
+
+# 等待主屏幕
+- extendedWaitUntil:
+    visible:
+      id: "main-screen"
+    timeout: 10000
+
+# 等待连接成功
+- extendedWaitUntil:
+    visible: "connected:true"
+    timeout: 15000
+
+- takeScreenshot: "01-connected"
+
+# 欢迎语流程完成后进入 listening
+# （speaking 状态持续时间极短，不稳定捕捉，直接验证最终状态）
+- extendedWaitUntil:
+    visible: "state:listening"
+    timeout: 30000
+
+- takeScreenshot: "02-listening-after-welcome"
+
+# 验证 app 无崩溃，UI 仍然响应
+- assertVisible:
+    id: "reset-button"
+
+- assertVisible:
+    id: "avatar-webview"
+
+- takeScreenshot: "03-still-responsive"

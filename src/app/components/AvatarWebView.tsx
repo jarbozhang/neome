@@ -519,6 +519,7 @@ const AvatarWebView = forwardRef<AvatarWebViewRef, AvatarWebViewProps>(
     return (
       <WebView
         ref={webViewRef}
+        testID="avatar-webview"
         source={{ html: getWebViewHTML(modelUrl), baseUrl: serverBaseUrl }}
         style={styles.webview}
         onMessage={handleMessage}

@@ -1,0 +1,76 @@
+# 稳定性测试
+# 验证多次重置、快速点击不崩溃，长时间等待后 app 仍响应
+
+appId: com.neome.app
+---
+- launchApp
+
+- runFlow:
+    when:
+      visible: "Continue"
+    commands:
+      - tapOn: "Continue"
+
+# 等待主屏幕和连接
+- extendedWaitUntil:
+    visible:
+      id: "main-screen"
+    timeout: 10000
+
+- extendedWaitUntil:
+    visible: "connected:true"
+    timeout: 15000
+
+# 等待进入 listening（确保初始流程完成）
+- extendedWaitUntil:
+    visible: "state:listening"
+    timeout: 30000
+
+- takeScreenshot: "01-stable-start"
+
+# 多次点击"新顾客"按钮（正常间隔）
+- repeat:
+    times: 3
+    commands:
+      - tapOn:
+          id: "reset-button"
+      - waitForAnimationToEnd
+
+- takeScreenshot: "02-after-normal-resets"
+
+# 验证 app 仍然响应
+- assertVisible:
+    id: "main-screen"
+- assertVisible:
+    id: "reset-button"
+
+# 等待重新恢复连接和 listening
+- extendedWaitUntil:
+    visible: "connected:true"
+    timeout: 15000
+
+- extendedWaitUntil:
+    visible: "state:listening"
+    timeout: 30000
+
+- takeScreenshot: "03-recovered-after-resets"
+
+# 快速连续点击"新顾客"按钮（压力测试）
+- repeat:
+    times: 5
+    commands:
+      - tapOn:
+          id: "reset-button"
+
+- takeScreenshot: "04-after-rapid-taps"
+
+# 等待状态稳定
+- waitForAnimationToEnd
+
+# 验证 app 未崩溃
+- assertVisible:
+    id: "main-screen"
+- assertVisible:
+    id: "reset-button"
+
+- takeScreenshot: "05-still-alive-after-rapid"

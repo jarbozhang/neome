@@ -1,0 +1,35 @@
+# 服务器连接验证
+# 验证 App 连接到 mock 服务器，状态从 idle 变为 listening
+
+appId: com.neome.app
+---
+- launchApp
+
+- runFlow:
+    when:
+      visible: "Continue"
+    commands:
+      - tapOn: "Continue"
+
+# 等待主屏幕加载
+- extendedWaitUntil:
+    visible:
+      id: "main-screen"
+    timeout: 10000
+
+- takeScreenshot: "01-before-connection"
+
+# 等待 WebSocket 连接成功
+- extendedWaitUntil:
+    visible: "connected:true"
+    timeout: 15000
+
+- takeScreenshot: "02-connected"
+
+# 连接后服务器发送欢迎语，经历 speaking → listening
+# 等待最终进入 listening 状态
+- extendedWaitUntil:
+    visible: "state:listening"
+    timeout: 30000
+
+- takeScreenshot: "03-state-listening"
