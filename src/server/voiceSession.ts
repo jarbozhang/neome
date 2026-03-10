@@ -36,8 +36,8 @@ const EVENT_SAY_HELLO         = 300   // 主动触发欢迎语
 
 // 事件编号：Server → Client（不需要 SessionID/ConnectID 前缀的特殊事件）
 // 注意：event 50 (ConnectionStarted) 实际包含 connectId 字段，所以不在此集合中
-// 不含 sessionId 的事件（客户端 + 服务端）
-const EVENTS_NO_SESSION_ID = new Set([1, 2, 50, 51, 52, 100])
+// 不含 sessionId/connectId 的事件（客户端 + 服务端）
+const EVENTS_NO_SESSION_ID = new Set([1, 2, 51, 52, 100])
 
 // 豆包语音对话 API URL（运行时读取，支持 E2E mock 覆盖）
 const getDoubaoUrl = () => process.env.DOUBAO_WS_URL || 'wss://openspeech.bytedance.com/api/v3/realtime/dialogue'

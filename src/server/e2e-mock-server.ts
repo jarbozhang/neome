@@ -104,11 +104,14 @@ function createMockDoubaoServer(port: number): WebSocketServer {
 
 /** event 1 → reply event 50 (ConnectionStarted)，无 sessionId */
 function handleStartConnection(ws: WebSocket): void {
-  console.log('[MockDoubao] → ConnectionStarted (50)')
+  const connectId = `mock-connect-${randomUUID().slice(0, 8)}`
+  console.log('[MockDoubao] → ConnectionStarted (50), cid:', connectId)
   const resp = encodeJsonFrame(
     MSG_TYPE_FULL_SERVER,
     50,
     {},
+    connectId,
+    true,  // 真实豆包 API 的 event 50 包含 connectId
   )
   ws.send(resp)
 }
