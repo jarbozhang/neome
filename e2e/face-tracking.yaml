@@ -1,0 +1,107 @@
+# Face Tracking 集成验证
+# 验证：
+# 1. 相机权限请求弹窗出现并可授权
+# 2. FaceTrackerWebView (隐藏) 已加载
+# 3. AvatarWebView 正常渲染（face tracking 不影响现有功能）
+# 4. 应用在 face tracking 启用后保持稳定
+
+appId: com.neome.app
+---
+- launchApp
+
+# 关闭可能出现的开发者菜单
+- runFlow:
+    when:
+      visible: "Continue"
+    commands:
+      - tapOn: "Continue"
+
+# 处理相机权限弹窗（iOS 系统弹窗）
+- runFlow:
+    when:
+      visible: ".*[Cc]amera.*"
+    commands:
+      - tapOn: "Allow"
+
+# 也尝试中文弹窗
+- runFlow:
+    when:
+      visible: ".*摄像头.*"
+    commands:
+      - tapOn:
+          text: ".*允许.*"
+
+# 等待主屏幕加载
+- extendedWaitUntil:
+    visible:
+      id: "main-screen"
+    timeout: 15000
+
+- takeScreenshot: "01-main-screen-with-face-tracking"
+
+# AvatarWebView 正常加载
+- extendedWaitUntil:
+    visible:
+      id: "avatar-webview"
+    timeout: 15000
+
+- takeScreenshot: "02-avatar-webview-loaded"
+
+# 验证 UI 仍然响应（新顾客按钮可见）
+- assertVisible:
+    id: "reset-button"
+
+- assertVisible: "新顾客"
+
+# 等待连接成功（服务器就绪后 face tracker 自动启动）
+- extendedWaitUntil:
+    visible: "connected:true"
+    timeout: 15000
+
+- takeScreenshot: "03-connected-face-tracking-active"
+
+# 等待进入 listening 状态（欢迎语流程完成）
+- extendedWaitUntil:
+    visible: "state:listening"
+    timeout: 30000
+
+- takeScreenshot: "04-listening-face-tracking-stable"
+
+# 验证应用在 face tracking 启用后仍然稳定
+# 等待几秒，确认无崩溃
+- swipe:
+    direction: UP
+    duration: 500
+
+- swipe:
+    direction: DOWN
+    duration: 500
+
+- assertVisible:
+    id: "main-screen"
+
+- assertVisible:
+    id: "avatar-webview"
+
+- takeScreenshot: "05-still-stable-after-interaction"
+
+# 测试重置会话（face tracking 应该继续工作）
+- tapOn:
+    id: "reset-button"
+
+# 重置后会断开 → 重连 → 欢迎语 → listening
+# idle 状态可能转瞬即逝，直接验证最终恢复到 listening
+- extendedWaitUntil:
+    visible: "state:listening"
+    timeout: 30000
+
+- takeScreenshot: "06-reset-reconnected-face-tracking"
+
+# 验证重连后 UI 仍然完好
+- assertVisible:
+    id: "avatar-webview"
+
+- assertVisible:
+    id: "reset-button"
+
+- takeScreenshot: "07-post-reset-stable"

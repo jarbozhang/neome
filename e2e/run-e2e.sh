@@ -99,6 +99,7 @@ else
     "$E2E_DIR/reset-session.yaml"
     "$E2E_DIR/full-conversation.yaml"
     "$E2E_DIR/stability.yaml"
+    "$E2E_DIR/face-tracking.yaml"
   )
 fi
 

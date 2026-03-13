@@ -115,6 +115,45 @@ function getWebViewHTML(modelUrl: string): string {
       animate()
     }
 
+    // ---------- Face tracking (bone rotation) ----------
+    let faceTargetYaw = 0
+    let faceTargetPitch = 0
+    let faceCurrentYaw = 0
+    let faceCurrentPitch = 0
+    let faceLost = false
+    const FACE_LERP = 0.15
+    const FACE_LOST_LERP = 0.05
+
+    function handleFacePosition(data) {
+      if (data.lost) {
+        faceLost = true
+        faceTargetYaw = 0
+        faceTargetPitch = 0
+      } else {
+        faceLost = false
+        faceTargetYaw = -(data.yaw || 0)
+        faceTargetPitch = data.pitch || 0
+      }
+    }
+
+    function updateFaceTracking() {
+      if (!currentVRM) return
+      const lerp = faceLost ? FACE_LOST_LERP : FACE_LERP
+      faceCurrentYaw += (faceTargetYaw - faceCurrentYaw) * lerp
+      faceCurrentPitch += (faceTargetPitch - faceCurrentPitch) * lerp
+
+      const head = currentVRM.humanoid.getNormalizedBoneNode('head')
+      if (head) {
+        head.rotation.y = faceCurrentYaw * 0.6
+        head.rotation.x = faceCurrentPitch * 0.3
+      }
+      const spine = currentVRM.humanoid.getNormalizedBoneNode('spine')
+      if (spine) {
+        // 呼吸动画 + face tracking 叠加
+        spine.rotation.y = faceCurrentYaw * 0.2
+      }
+    }
+
     function handleMessage(msg) {
       switch (msg.type) {
         case 'set_state':
@@ -124,6 +163,9 @@ function getWebViewHTML(modelUrl: string): string {
           handleVisemes(msg.data)
           break
         case 'set_expression':
+          break
+        case 'face_position':
+          handleFacePosition(msg.data)
           break
       }
     }
@@ -371,6 +413,9 @@ function getWebViewHTML(modelUrl: string): string {
           }
         }
 
+        // Face tracking: bone rotation (叠加在呼吸动画之后)
+        updateFaceTracking()
+
         updateMouth(delta)
       }
 
@@ -436,9 +481,9 @@ function getWebViewHTML(modelUrl: string): string {
             currentVRM.expressionManager.setValue(MOUTH_VISEMES[key], 0)
           }
         }
-        // 重置头部旋转
+        // 重置头部 z 旋转（thinking 歪头），x/y 由 face tracking 接管
         const head = currentVRM.humanoid.getNormalizedBoneNode('head')
-        if (head) { head.rotation.z = 0; head.rotation.x = 0 }
+        if (head) { head.rotation.z = 0 }
       }
       // 占位体 fallback
       if (placeholderHead) placeholderHead.material.color.setHex(0xffcc99)

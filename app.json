@@ -15,7 +15,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.neome.app",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "NeoMe 需要麦克风权限来进行语音点单"
+        "NSMicrophoneUsageDescription": "NeoMe 需要麦克风权限来进行语音点单",
+        "NSCameraUsageDescription": "NeoMe 需要摄像头来追踪您的面部方向，让数字人看向您"
       }
     },
     "android": {
@@ -24,13 +25,19 @@
         "backgroundColor": "#ffffff"
       },
       "package": "com.neome.app",
-      "permissions": ["android.permission.RECORD_AUDIO"]
+      "permissions": ["android.permission.RECORD_AUDIO", "android.permission.CAMERA"]
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "NeoMe 需要摄像头来追踪您的面部方向，让数字人看向您"
+        }
+      ]
     ]
   }
 }
