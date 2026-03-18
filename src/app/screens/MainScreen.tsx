@@ -1,5 +1,5 @@
 import React, { useCallback, useRef, useEffect, useState } from 'react'
-import { StyleSheet, View, Text, TouchableOpacity } from 'react-native'
+import { StyleSheet, View, Text, TouchableOpacity, Dimensions } from 'react-native'
 import Constants from 'expo-constants'
 import { CameraView, useCameraPermissions } from 'expo-camera'
 import AvatarWebView, { AvatarWebViewRef } from '../components/AvatarWebView'
@@ -18,6 +18,7 @@ const SERVER_URL = `ws://${SERVER_HOST}:${SERVER_PORT}/ws`
 const MODEL_URL = `${SERVER_BASE}/vrm/default.vrm?raw=true`
 
 const STATUS_BAR_HEIGHT = Constants.statusBarHeight || 44
+const SCREEN_HEIGHT = Dimensions.get('window').height
 
 export default function MainScreen() {
   const { connected, state, userTranscript, aiReply, resetSession } = useSession(SERVER_URL)
@@ -99,26 +100,28 @@ export default function MainScreen() {
 
   return (
     <View style={styles.container} testID="main-screen">
-      {/* Avatar 全屏底层 — 不接收触摸 */}
-      <View style={styles.avatarFullscreen} pointerEvents="none">
+      {/* Avatar 全屏底层 */}
+      <View style={styles.avatarFullscreen}>
         <AvatarWebView ref={avatarRef} modelUrl={MODEL_URL} serverBaseUrl={SERVER_BASE} onReady={handleReady} onError={handleError} />
       </View>
 
-      {/* 顶部栏 — 绝对定位，始终在顶部 */}
-      <View style={styles.topBar}>
-        <View style={styles.topBarSide} />
-        <Text style={styles.characterName}>小Neo</Text>
-        <View style={styles.topBarSide}>
-          {!connected && (
-            <View style={styles.connectionBadge}>
-              <Text style={styles.connectionText}>连接中...</Text>
-            </View>
-          )}
+      {/* UI 覆盖层 — flex:1 + space-between，topBar 顶部 bottomUI 底部 */}
+      <View style={styles.overlay}>
+        {/* 顶部栏 */}
+        <View style={styles.topBar}>
+          <View style={styles.topBarSide} />
+          <Text style={styles.characterName}>小Neo</Text>
+          <View style={styles.topBarSide}>
+            {!connected && (
+              <View style={styles.connectionBadge}>
+                <Text style={styles.connectionText}>连接中...</Text>
+              </View>
+            )}
+          </View>
         </View>
-      </View>
 
-      {/* 底部 UI 区域 — 绝对定位，始终在底部 */}
-      <View style={styles.bottomUI}>
+        {/* 底部 UI 区域 */}
+        <View style={styles.bottomUI}>
         {/* 对话区域 */}
         {isSubtitleOn && (
           <ConversationArea userText={userTranscript} aiText={aiReply} />
@@ -158,6 +161,7 @@ export default function MainScreen() {
           isMicActive={isMicActive}
           isSubtitleOn={isSubtitleOn}
         />
+        </View>
       </View>
 
       {/* 隐藏的 Camera 和 FaceTracker */}
@@ -183,11 +187,11 @@ const styles = StyleSheet.create({
   avatarFullscreen: {
     ...StyleSheet.absoluteFillObject,
   },
+  overlay: {
+    height: SCREEN_HEIGHT,
+    justifyContent: 'space-between',
+  },
   topBar: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -215,10 +219,6 @@ const styles = StyleSheet.create({
     color: '#999',
   },
   bottomUI: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
   },
   hiddenCamera: {
     width: 1,

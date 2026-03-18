@@ -757,6 +757,7 @@ const AvatarWebView = forwardRef<AvatarWebViewRef, AvatarWebViewProps>(
         mixedContentMode="compatibility"
         allowsInlineMediaPlayback={true}
         mediaPlaybackRequiresUserAction={false}
+        scrollEnabled={false}
         // @ts-expect-error: allowsTransparentBackground is supported by iOS WKWebView but not typed
         allowsTransparentBackground={true}
       />
