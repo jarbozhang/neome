@@ -41,9 +41,9 @@ function init(): void {
   scene = new THREE.Scene()
   scene.background = new THREE.Color(0xf0f0f0)
 
-  camera = new THREE.PerspectiveCamera(30, window.innerWidth / window.innerHeight, 0.1, 20)
-  camera.position.set(0, 1.3, 1.5)
-  camera.lookAt(0, 1.2, 0)
+  camera = new THREE.PerspectiveCamera(25, window.innerWidth / window.innerHeight, 0.1, 20)
+  camera.position.set(0, 1.30, 1.3)
+  camera.lookAt(0, 1.22, 0)
 
   renderer = new THREE.WebGLRenderer({ antialias: true })
   renderer.setSize(window.innerWidth, window.innerHeight)
@@ -100,6 +100,9 @@ function handleMessage(msg: RNMessage): void {
       break
     case 'set_expression':
       // Phase 2 实现
+      break
+    case 'play_gesture':
+      playGesture(msg.data as string)
       break
   }
 }

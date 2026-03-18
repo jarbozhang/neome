@@ -11,7 +11,7 @@ function getWebViewHTML(modelUrl: string): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <style>
     * { margin: 0; padding: 0; }
-    html, body { width: 100%; height: 100%; overflow: hidden; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; }
     canvas { display: block; }
   </style>
 </head>
@@ -43,6 +43,156 @@ function getWebViewHTML(modelUrl: string): string {
     let placeholderBody = null
     let placeholderHead = null
 
+    // ---------- 手臂姿态系统 ----------
+    // VRM T-pose 中手臂水平展开，需要旋转到自然下垂
+    // 骨骼旋转值: { boneKey: { x, y, z } }
+    const ARM_POSES = {
+      // 自然站立：手臂下垂贴近身体
+      idle: {
+        leftUpperArm:  { x: 0.15, y: 0, z: 1.2 },
+        rightUpperArm: { x: 0.15, y: 0, z: -1.2 },
+        leftLowerArm:  { x: 0, y: 0, z: 0.15 },
+        rightLowerArm: { x: 0, y: 0, z: -0.15 },
+      },
+      // 说话：手臂稍微抬起
+      speaking: {
+        leftUpperArm:  { x: 0.1, y: 0, z: 0.9 },
+        rightUpperArm: { x: 0.1, y: 0, z: -0.9 },
+        leftLowerArm:  { x: 0, y: 0, z: 0.3 },
+        rightLowerArm: { x: 0, y: 0, z: -0.3 },
+      },
+    }
+
+    let targetArmPose = ARM_POSES.idle
+    let armLerpSpeed = 4.0
+
+    function setArmPose(poseName) {
+      const pose = ARM_POSES[poseName]
+      if (pose) {
+        targetArmPose = pose
+      }
+    }
+
+    function updateArmPose(delta) {
+      if (!currentVRM) return
+      const humanoid = currentVRM.humanoid
+      const lerpFactor = 1 - Math.exp(-armLerpSpeed * delta)
+
+      for (const boneName of Object.keys(targetArmPose)) {
+        const bone = humanoid.getNormalizedBoneNode(boneName)
+        if (!bone) continue
+        const target = targetArmPose[boneName]
+
+        bone.rotation.x += (target.x - bone.rotation.x) * lerpFactor
+        bone.rotation.y += (target.y - bone.rotation.y) * lerpFactor
+        bone.rotation.z += (target.z - bone.rotation.z) * lerpFactor
+      }
+    }
+
+    // ---------- Greet (微笑欢迎) ----------
+    let greetTimer = null
+    function triggerGreet() {
+      if (!currentVRM) return
+      const em = currentVRM.expressionManager
+      if (!em) return
+      em.setValue('happy', 0.7)
+      if (greetTimer) clearTimeout(greetTimer)
+      greetTimer = setTimeout(() => {
+        em.setValue('happy', 0)
+        greetTimer = null
+      }, 2000)
+    }
+
+    // ---------- Gesture Animation System ----------
+    // Additive bone offsets, applied AFTER face tracking / arm pose / breathing
+    let activeGesture = null   // { name, startTime }
+    let gestureBoneOffsets = {} // { boneName: { x, y, z } }
+    let gestureExprOverrides = {} // { exprName: value }
+
+    const GESTURE_DEFS = {
+      nod: {
+        duration: 1.0,
+        compute(t) {
+          // 两次点头，衰减
+          const angle = Math.sin(t * Math.PI * 4) * 0.18 * (1 - t * 0.4)
+          return {
+            bones: { head: { x: angle, y: 0, z: 0 } },
+            expressions: {}
+          }
+        }
+      },
+      shake: {
+        duration: 1.2,
+        compute(t) {
+          // 两次摇头，衰减
+          const angle = Math.sin(t * Math.PI * 5) * 0.2 * (1 - t * 0.4)
+          return {
+            bones: { head: { x: 0, y: angle, z: 0 } },
+            expressions: {}
+          }
+        }
+      },
+      happy: {
+        duration: 1.5,
+        compute(t) {
+          const bounce = Math.sin(t * Math.PI * 4) * 0.015 * (1 - t)
+          const expr = t < 0.15 ? t / 0.15 : t > 0.75 ? (1 - t) / 0.25 : 1
+          return {
+            bones: { spine: { x: -bounce, y: 0, z: 0 } },
+            expressions: { happy: expr * 0.7 }
+          }
+        }
+      },
+    }
+
+    function playGesture(name) {
+      if (!GESTURE_DEFS[name]) return
+      activeGesture = { name, startTime: clock.getElapsedTime() }
+      gestureBoneOffsets = {}
+      gestureExprOverrides = {}
+    }
+
+    function updateGesture() {
+      if (!activeGesture) {
+        // Decay remaining offsets smoothly to zero
+        let alive = false
+        for (const k of Object.keys(gestureBoneOffsets)) {
+          const o = gestureBoneOffsets[k]
+          o.x *= 0.85; o.y *= 0.85; o.z *= 0.85
+          if (Math.abs(o.x) + Math.abs(o.y) + Math.abs(o.z) > 0.002) alive = true
+        }
+        for (const k of Object.keys(gestureExprOverrides)) {
+          gestureExprOverrides[k] *= 0.85
+          if (gestureExprOverrides[k] > 0.002) alive = true
+        }
+        if (!alive) { gestureBoneOffsets = {}; gestureExprOverrides = {} }
+        return
+      }
+
+      const def = GESTURE_DEFS[activeGesture.name]
+      const t = Math.min((clock.getElapsedTime() - activeGesture.startTime) / def.duration, 1)
+      if (t >= 1) { activeGesture = null; return }
+
+      const frame = def.compute(t)
+      gestureBoneOffsets = frame.bones || {}
+      gestureExprOverrides = frame.expressions || {}
+    }
+
+    function applyGestureOffsets() {
+      if (!currentVRM) return
+      for (const [bone, off] of Object.entries(gestureBoneOffsets)) {
+        const node = currentVRM.humanoid.getNormalizedBoneNode(bone)
+        if (node) {
+          node.rotation.x += (off.x || 0)
+          node.rotation.y += (off.y || 0)
+          node.rotation.z += (off.z || 0)
+        }
+      }
+      for (const [expr, val] of Object.entries(gestureExprOverrides)) {
+        if (val > 0.002) currentVRM.expressionManager.setValue(expr, val)
+      }
+    }
+
     // ---------- Viseme 口型 ----------
     const MOUTH_VISEMES = {
       'aa': 'aa',
@@ -58,11 +208,11 @@ function getWebViewHTML(modelUrl: string): string {
 
     function init() {
       scene = new THREE.Scene()
-      scene.background = new THREE.Color(0xf0f0f0)
+      scene.background = null
 
-      camera = new THREE.PerspectiveCamera(30, window.innerWidth / window.innerHeight, 0.1, 20)
-      camera.position.set(0, 1.3, 1.5)
-      camera.lookAt(0, 1.2, 0)
+      camera = new THREE.PerspectiveCamera(25, window.innerWidth / window.innerHeight, 0.1, 20)
+      camera.position.set(0, 1.42, 1.3)
+      camera.lookAt(0, 1.35, 0)
 
       renderer = new THREE.WebGLRenderer({
         antialias: true,
@@ -167,6 +317,12 @@ function getWebViewHTML(modelUrl: string): string {
         case 'face_position':
           handleFacePosition(msg.data)
           break
+        case 'greet':
+          triggerGreet()
+          break
+        case 'play_gesture':
+          playGesture(msg.data)
+          break
       }
     }
 
@@ -199,20 +355,24 @@ function getWebViewHTML(modelUrl: string): string {
           breathingEnabled = true
           startBlinking()
           resetExpression()
+          setArmPose('idle')
           break
         case 'listening':
           breathingEnabled = true
           startBlinking()
           setListeningExpression()
+          setArmPose('idle')
           break
         case 'thinking':
           breathingEnabled = true
           setThinkingExpression()
+          setArmPose('idle')
           break
         case 'speaking':
           breathingEnabled = true
           startBlinking()
           resetExpression()
+          setArmPose('speaking')
           break
       }
     }
@@ -237,9 +397,9 @@ function getWebViewHTML(modelUrl: string): string {
         // 强制更新世界矩阵
         vrmScene.updateMatrixWorld(true)
 
-        // 半身特写相机
-        camera.position.set(0, 1.35, 1.5)
-        camera.lookAt(0, 1.25, 0)
+        // 头+肩+胸部特写相机
+        camera.position.set(0, 1.42, 1.3)
+        camera.lookAt(0, 1.35, 0)
         camera.fov = 25
         camera.near = 0.01
         camera.far = 100
@@ -313,6 +473,19 @@ function getWebViewHTML(modelUrl: string): string {
 
         // 移除占位体（如果有的话）
         removePlaceholder()
+
+        // 从 T-pose 切换到自然下垂姿态
+        setArmPose('idle')
+        // 立即应用（不等 lerp），避免首帧 T-pose 闪烁
+        for (const boneName of Object.keys(ARM_POSES.idle)) {
+          const bone = currentVRM.humanoid.getNormalizedBoneNode(boneName)
+          if (bone) {
+            const t = ARM_POSES.idle[boneName]
+            bone.rotation.set(t.x, t.y, t.z)
+          }
+        }
+        // 强制 update 一次让 normalized → raw 生效
+        currentVRM.update(0)
 
         sendToRN({ type: 'ready', data: { vrm: true, childCount: vrmScene.children.length } })
         startBlinking()
@@ -403,9 +576,7 @@ function getWebViewHTML(modelUrl: string): string {
       const elapsed = clock.getElapsedTime()
 
       if (currentVRM) {
-        currentVRM.update(delta)
-
-        // VRM 呼吸动画：微调 spine bone
+        // VRM 呼吸动画
         if (breathingEnabled) {
           const spine = currentVRM.humanoid.getNormalizedBoneNode('spine')
           if (spine) {
@@ -413,10 +584,21 @@ function getWebViewHTML(modelUrl: string): string {
           }
         }
 
-        // Face tracking: bone rotation (叠加在呼吸动画之后)
+        // Face tracking
         updateFaceTracking()
 
+        // 手臂姿态插值
+        updateArmPose(delta)
+
+        // 口型
         updateMouth(delta)
+
+        // 手势动画（additive，在其他系统之后叠加）
+        updateGesture()
+        applyGestureOffsets()
+
+        // ★ 最后调用 update()，将 normalized → raw
+        currentVRM.update(delta)
       }
 
       // 占位体呼吸（fallback）
@@ -575,6 +757,8 @@ const AvatarWebView = forwardRef<AvatarWebViewRef, AvatarWebViewProps>(
         mixedContentMode="compatibility"
         allowsInlineMediaPlayback={true}
         mediaPlaybackRequiresUserAction={false}
+        // @ts-expect-error: allowsTransparentBackground is supported by iOS WKWebView but not typed
+        allowsTransparentBackground={true}
       />
     )
   }
